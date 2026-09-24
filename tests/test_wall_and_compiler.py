@@ -154,3 +154,27 @@ def test_throttled_calls_are_retried_with_the_server_hint(monkeypatch):
     assert calls["n"] == 3 and llm.TRANSCRIPT[-1]["retries"] == 2
     calls["n"] = -100                                      # keeps failing → gives up within the time budget
     assert llm.chat_json("x", llm.EXTRACT_SCHEMA, "facts", timeout=1) is None
+
+
+def test_duplicate_of_a_safety_check_says_so():
+    from leash.llm import review
+    existing = [{"field": "authorization.billing_amount_chf", "operator": "<=", "value": 120.0},
+                {"field": "derived.quasi_cash_lines", "operator": "<=", "value": 0}]
+    proposed = [{"field": "authorization.billing_amount_chf", "operator": "<=", "value": 120},
+                {"field": "derived.quasi_cash_lines", "operator": "=", "value": 0}]
+    _, dropped = review("Groceries, at most CHF 120 per order.", existing, proposed, {"derived.quasi_cash_lines"})
+    assert [d["why"] for d in dropped] == ["already covered by a rule from your words",
+                                          "already one of the always-on safety checks"]
+
+
+def test_screen_size_already_in_the_chosen_product_says_so():
+    from leash.llm import review
+    from leash.session import _dropped_text
+    existing = [{"field": "items.item_id", "operator": "in", "value": ["IT0017"]}]      # 27-inch computer monitor
+    proposed = [{"field": "extracted.size", "operator": "in", "value": ["27-inch"]},
+                {"field": "extracted.size", "operator": "in", "value": ["XL-ish"]},
+                {"field": "authorization.merchant.merchant_country", "operator": "in", "value": []}]
+    _, dropped = review("Buy the 27-inch monitor I chose, CHF 400 or less.", existing, proposed)
+    assert [d["why"] for d in dropped] == ["already part of the product you asked for (27-inch computer monitor)",
+                                          "not a clothing or shoe size, which is what this check compares", "empty value"]
+    assert _dropped_text(proposed[2]) == "A rule on 'authorization.merchant.merchant_country' with no value given"

@@ -61,6 +61,11 @@ details summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:13p
 .bt div{background:var(--surface);padding:8px 10px;display:flex;flex-direction:column}
 .bt b{font:650 20px/1.1 var(--display);font-variant-numeric:tabular-nums}
 .bt span{font-size:12px;color:var(--muted)}
+.pill.sig{color:var(--accent);background:var(--accent-soft)}
+.ap2box{border-left:3px solid var(--accent);background:var(--accent-soft);padding:8px 12px;border-radius:0 6px 6px 0;font-size:13px;display:flex;flex-direction:column;gap:6px}
+label.check{display:flex;gap:8px;align-items:flex-start;font-weight:400;font-size:13.5px}
+label.check input{width:auto;margin-top:3px}
+pre.json{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0 0;max-height:300px;overflow:auto}
 @media (prefers-reduced-motion:no-preference){.slip.fresh{animation:in .5s ease-out}@keyframes in{from{background:var(--accent-soft)}}}
 </style>
 </head>
@@ -77,6 +82,7 @@ details summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:13p
       <select id="scenario"></select>
       <label for="instruction">Your instruction</label>
       <textarea id="instruction"></textarea>
+      <label class="check" id="ap2-row" hidden><input type="checkbox" id="ap2"><span><b>Shops sign their carts (AP2).</b> Viseca one signs your agent's permission when you confirm; each shop signs its cart; Viseca checks both signatures before paying.</span></label>
       <button id="compile">Show me the rules</button>
     </section>
     <section class="panel" id="rules" hidden>
@@ -132,11 +138,13 @@ function toast(msg){ const t=$("#toast"); t.textContent=msg; t.hidden=false; cle
 async function init(){
   const j = await api("/api/scenarios"); SCEN = j.scenarios;
   $("#mode").textContent = j.live ? "Live API" : "Offline simulator";
+  $("#ap2-row").hidden = j.live; $("#ap2").checked = j.ap2;
   $("#scenario").innerHTML = SCEN.map(s => `<option value="${s.scenario_id}">${esc(s.persona)} · ${esc(s.name)} (${s.events} purchases)</option>`).join("");
   $("#scenario").value = "SCEN0004"; fill();
 }
 function fill(){ const s = SCEN.find(x => x.scenario_id === $("#scenario").value); $("#instruction").value = s.instruction; }
 $("#scenario").onchange = fill;
+$("#ap2").onchange = async () => { try{ const r = await api("/api/ap2", {enabled:$("#ap2").checked}); toast(r.ap2 ? "Shops will sign their carts (AP2)." : "AP2 off."); }catch(e){ $("#ap2").checked = !$("#ap2").checked; toast(e.message); } };
 $("#compile").onclick = async () => {
   try{
     const j = await api("/api/compile", {scenario_id:$("#scenario").value, instruction:$("#instruction").value});
@@ -160,7 +168,7 @@ $("#compile").onclick = async () => {
 };
 $("#confirm").onclick = async () => { try{ const m = await api("/api/confirm", {}); toast("Permissions confirmed: " + m.mandate_id); $("#rules").hidden = true; $("#setup").hidden = true; $("#controls").hidden = false; refresh(); }catch(e){ toast(e.message); } };
 $("#start").onclick = async () => { try{ await api("/api/start", {}); $("#start").disabled = true; toast("The agent is shopping."); }catch(e){ toast(e.message); } };
-$("#reset").onclick = async () => { await api("/api/reset", {}); for(const k in last) delete last[k]; confirmRevoke=false; $("#setup").hidden=false; $("#rules").hidden=true; $("#controls").hidden=true; $("#start").disabled=false; toast("Started over."); refresh(); };
+$("#reset").onclick = async () => { await api("/api/reset", {}); $("#ap2").checked = false; for(const k in last) delete last[k]; confirmRevoke=false; $("#setup").hidden=false; $("#rules").hidden=true; $("#controls").hidden=true; $("#start").disabled=false; toast("Started over."); refresh(); };
 $("#tighten-cap").onclick = async () => { const v = parseFloat($("#cap").value); if(!(v>0)) return toast("Enter a limit in CHF, for example 150."); try{ await api("/api/tighten", {max_per_order_chf:v}); toast(`Added: each order at most CHF ${v.toFixed(2)}.`); }catch(e){ toast(e.message); } };
 $("#tighten-unc").onclick = async () => { try{ await api("/api/tighten", {uncertainty:"decline"}); toast("When unsure, we'll now decline."); }catch(e){ toast(e.message); } };
 document.addEventListener("click", async ev => {
@@ -177,7 +185,17 @@ document.addEventListener("click", async ev => {
 });
 function checks(list){
   const icon = {pass:"✓", fail:"✕", unknown:"?"};
-  return `<ul class="checks">${list.map(c => `<li><span class="st-${c.status}">${icon[c.status]}</span><span>${esc(c.text)}</span></li>`).join("")}</ul>`;
+  const badge = c => c.tier === "ap2" ? ` <span class="pill sig">AP2</span>` : c.provenance === "shop-signed" ? ` <span class="pill sig">shop-signed</span>` : (c.extra || {}).signed_permission ? ` <span class="pill sig">signed</span>` : "";
+  return `<ul class="checks">${list.map(c => `<li><span class="st-${c.status}">${icon[c.status]}</span><span>${esc(c.text)}${badge(c)}</span></li>`).join("")}</ul>`;
+}
+function receiptPill(r){
+  return r.result === "success" ? `<span class="pill approve">AP2 · paid, token issued</span>` : `<span class="pill ${r.error === "unresolved_constraint" ? "step_up" : "decline"}">AP2 · ${esc(r.error.replaceAll("_"," "))}</span>`;
+}
+function ap2box(f){
+  if(!f.ap2_receipt) return "";
+  return `<div class="ap2box"><div class="row"><b>Viseca's signed receipt to the agent:</b> ${receiptPill(f.ap2_receipt)}
+      ${f.ap2_resolution ? `<b>after you answered on Viseca one:</b> ${receiptPill(f.ap2_resolution)}` : ""}</div>
+    <details data-k="ap2-${f.authorization_id}"><summary>Shop-signed cart and receipt (decoded)</summary><pre class="mono json">${esc(JSON.stringify({receipt:f.ap2_receipt, after_you_answered:f.ap2_resolution || undefined, ...(f.ap2_decoded || {})}, null, 1))}</pre></details></div>`;
 }
 function head(f){
   const items = f.items.map(l => `${l.quantity}× ${l.item_name}`).join(", ");
@@ -194,7 +212,12 @@ function render(s){
     const m = s.mandate;
     put("#mandate-body", `<p class="mono">${esc(m.mandate_id)} · ${esc(s.revoked ? "withdrawn" : m.status)} · when unsure: ${esc(s.uncertainty_override || m.uncertainty_policy)}</p>
       <ul class="plain">${m.rules_text.slice(0, 40).map(t => `<li>${esc(t)}</li>`).join("")}</ul>
-      ${s.engine_extra_rules.length ? `<p class="note">Added by you during this run: applied immediately.</p>` : ""}`);
+      ${s.engine_extra_rules.length ? `<p class="note">Added by you during this run: applied immediately.</p>` : ""}
+      ${s.ap2 ? `<div class="ap2box"><b>Signed on Viseca one</b><span class="note">Bound to your agent's key <span class="mono">${esc(s.ap2.visibility.agent_key)}</span>, valid until ${esc(s.ap2.visibility.valid_until)}.</span>
+        <span><b>Shops see:</b> ${s.ap2.visibility.shop_sees.map(esc).join(" ")}</span>
+        <span><b>Viseca checks:</b> ${s.ap2.visibility.viseca_sees.map(esc).join(" ")}</span>
+        <span class="note">${esc(s.ap2.visibility.stays_private)}</span>
+        <details data-k="ap2-open"><summary>Open mandates (decoded)</summary><pre class="mono json">${esc(JSON.stringify(s.ap2.decoded, null, 1))}</pre></details></div>` : ""}`);
     put("#revoke-area", s.revoked ? `<p class="note"><b>Permission withdrawn.</b> Nothing more can be approved under it.</p>`
       : confirmRevoke ? `<div class="confirm-revoke"><b>Withdraw permission?</b><span class="note">The agent can't buy anything more, and purchases waiting for you can only be declined.</span><div class="row"><button class="no" data-act="revoke-yes">Withdraw</button><button class="ghost" data-act="revoke-cancel">Keep</button></div></div>`
       : `<button class="warn" data-act="revoke-ask">Withdraw permission</button>`);
@@ -205,6 +228,7 @@ function render(s){
   put("#inbox", pend.length ? pend.map(f => `
     <div class="slip needs"><div class="slip-head">${head(f)}<span class="pill step_up">waiting · <span data-countdown="${f.authorization_id}"></span></span></div>
       <div class="slip-body"><div>${esc(f.message)}</div>${verbatims(f)}
+      ${f.ap2_receipt ? `<span class="note">Your agent's permission isn't enough for this one. Approving signs this checkout on Viseca one (Trusted Surface), as you.</span>` : ""}
       <details data-k="in-${f.authorization_id}"><summary>All checks</summary>${checks(f.checks)}</details>
       <div class="row"><button class="ok" data-act="resolve" data-id="${f.authorization_id}" data-dec="approve" ${s.revoked ? "disabled title='Permission withdrawn'" : ""}>Approve</button>
       <button class="no" data-act="resolve" data-id="${f.authorization_id}" data-dec="decline">Decline</button>
@@ -230,7 +254,7 @@ function render(s){
     const fresh = false;
     const final = f.decision === "step_up" ? `<span class="pill ${f.status}">${f.resolved_by ? LABEL[f.status] + " by you" : LABEL[f.status]}</span>` : "";
     return `<div class="slip ${fresh ? "fresh" : ""}"><div class="slip-head">${head(f)}<span class="row"><span class="pill ${f.decision}">${LABEL[f.decision]}</span>${final}</span></div>
-      <div class="slip-body"><div>${esc(f.message)}</div>${verbatims(f)}
+      <div class="slip-body"><div>${esc(f.message)}</div>${verbatims(f)}${ap2box(f)}
       <details data-k="ev-${f.authorization_id}"><summary>Evidence: ${f.checks.length} checks · ${esc(f.reason_codes.join(", "))}</summary>${checks(f.checks)}</details></div></div>`;
   }).join("") : `<p class="empty">Confirm your permissions and let the agent shop to see its purchases here.</p>`);
 }

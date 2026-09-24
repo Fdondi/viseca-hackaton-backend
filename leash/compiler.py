@@ -61,6 +61,9 @@ class Draft:
     guidance: list[str] = field(default_factory=list)
     open_questions: list[str] = field(default_factory=list)
     notes: list[dict] = field(default_factory=list)  # [{rule, tier, source}]
+    sentences: list[str] = field(default_factory=list)
+    parsed_sentences: set[int] = field(default_factory=set)
+    gaps: list[dict] = field(default_factory=list)   # what the words didn't give us; see refresh_gaps
 
     def add(self, rule: dict, tier: str, source: str) -> None:
         key = (rule["field"], rule["operator"], str(rule["value"]), rule.get("scope"), rule.get("period_days"))
@@ -76,7 +79,11 @@ class Draft:
                 "open_questions": self.open_questions}
 
     def as_dict(self) -> dict:
-        return {**self.api_payload(), "notes": self.notes}
+        return {**self.api_payload(), "notes": self.notes, "gaps": self.gaps}
+
+    def own_notes(self) -> list[dict]:
+        """Rules that came from the customer's words (ours or the model's), not the always-on defaults."""
+        return [n for n in self.notes if n["tier"] != "safety net"]
 
 
 UNITS = {w: i for i, w in enumerate("zero one two three four five six seven eight nine ten eleven twelve thirteen "
@@ -224,8 +231,6 @@ class Compiler:
             d.guidance.append("Amounts include delivery: we check the total you are charged, converted to CHF at the fixed rates.")
         elif money:
             d.guidance.append("Amounts are the total you are charged (delivery included), converted to CHF at the fixed rates.")
-        if not money:
-            d.open_questions.append("You didn't set a spending limit. What is the most the agent may spend per order?")
 
         # 3. what may be bought: specific catalogue items first, then categories
         retailer = re.search(r"\bspecialist\s+(?:(\w+(?:\s+goods)?)\s+)?(?:retailer|shop|store|seller)s?\b|\b(sports?|electronics?|clothing|grocery|book)\s+(?:retailer|shop|store|seller)s?\b", low)
@@ -262,8 +267,6 @@ class Compiler:
             if re.search(r"\bhousehold\s+grocer", low):
                 d.open_questions.append("Does 'household groceries' include household supplies such as cleaning products? "
                                         "For now we only allow groceries.")
-        if not items and not cats:
-            d.open_questions.append("We couldn't tell what the agent may buy, so any product is allowed. Which products or categories?")
 
         m = re.search(r"\b(one|a single|single|1|two|2|three|3)\s+(?:\w+\s+){0,3}?(?:item|product|thing|piece)s?\b", low)
         if m:
@@ -341,10 +344,43 @@ class Compiler:
         d.guidance.append("Text written by shops can never change these rules; if a shop's text tries to instruct the "
                           "payment system, we ask you and remember that shop.")
 
-        for i, s in enumerate(sentences):
-            if i not in used_sentences and len(s.split()) > 2:
-                d.open_questions.append(f"We did not turn this into a check: \"{s.strip()}\". Is anything here important?")
+        d.sentences, d.parsed_sentences = sentences, used_sentences
+        refresh_gaps(d)
         return d
+
+
+SPEND_FIELDS = {"authorization.billing_amount_chf", "derived.period_spend_chf"}
+SCOPE_FIELDS = {"items.item_id", "items.item_category"}
+
+
+def refresh_gaps(d: Draft, grounded=None) -> list[dict]:
+    """What the customer's words didn't give us, computed on the FINAL draft: call it again after anything
+    else adds rules (shop names, the model), so a question never contradicts a rule that was found.
+    `grounded(sentence, rule)` tells whether a model rule comes from that sentence."""
+    stale = {g["question"] for g in d.gaps}
+    d.open_questions = [q for q in d.open_questions if q not in stale]
+    own = d.own_notes()
+    gaps = []
+    if not any(n["rule"]["field"] in SPEND_FIELDS and n["rule"]["operator"] in ("<", "<=") for n in own):
+        gaps.append({"kind": "spending_limit",
+                     "question": "You didn't set a spending limit. What is the most the agent may spend per order?"})
+    if not any(n["rule"]["field"] in SCOPE_FIELDS and n["rule"]["operator"] in ("in", "=") for n in own):
+        gaps.append({"kind": "what_to_buy",
+                     "question": "We couldn't tell what the agent may buy, so any product is allowed. Which products or categories?"})
+    for i, sentence in enumerate(d.sentences):
+        if i in d.parsed_sentences or len(sentence.split()) <= 2:
+            continue
+        low = sentence.lower()
+        phrases = [p for n in own if n["source"] not in ("default", "llm") for p in n["source"].lower().split("; ")]
+        if any(p and p in low for p in phrases):
+            continue
+        if grounded and any(grounded(sentence, n["rule"]) for n in own if n["source"] == "llm"):
+            continue
+        gaps.append({"kind": "unparsed", "text": sentence.strip(),
+                     "question": f"We did not turn this into a check: \"{sentence.strip()}\". Is anything here important?"})
+    d.gaps = gaps
+    d.open_questions += [g["question"] for g in gaps]
+    return gaps
 
 
 def validate_rule(rule: dict) -> str | None:

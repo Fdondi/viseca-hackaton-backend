@@ -43,6 +43,27 @@ def main(base: str) -> None:
         pg.set_viewport_size({"width": 400, "height": 900})
         pg.wait_for_timeout(300)
         pg.screenshot(path=str(OUT / "demo-web-4-phone.png"), full_page=False)
+        pg.set_viewport_size({"width": 1500, "height": 1000})
+
+        # AP2: the same customer, with shops signing their carts
+        pg.click("#change")
+        pg.click(".person[data-sid='SCEN0004']")
+        pg.check("#ap2")
+        pg.click("#go")
+        pg.wait_for_selector("#send")
+        send()                                     # AU0035: signed, verified, approved (success receipt)
+        pg.click("button[data-preset='replay']")   # AU0036: the agent presents AU0035's signed cart again
+        send()
+        pg.screenshot(path=str(OUT / "demo-web-5-ap2-replay.png"), full_page=True)
+        send()                                     # AU0037: injection inside a shop-signed cart → flag cites proof
+        pg.click("button[data-preset='withhold']") # AU0038: no signed cart → unresolved_constraint → customer
+        send()
+        pg.click("#answer button[data-res='approve']")
+        pg.wait_for_timeout(300)
+        pg.screenshot(path=str(OUT / "demo-web-6-ap2-human-present.png"), full_page=True)
+        pg.click("button[data-preset='tamper']")   # AU0039: the agent submits 30% less than the shop signed
+        send()
+        pg.screenshot(path=str(OUT / "demo-web-7-ap2-tamper.png"), full_page=True)
         b.close()
     print("page errors:", errors or "none")
 

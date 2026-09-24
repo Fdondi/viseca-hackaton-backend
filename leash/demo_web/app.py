@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from ..ap2 import shop_attributes
 from ..data import load
 from ..engine import RevokedError
 from ..events import new_live_id, validation_errors
@@ -26,6 +27,16 @@ STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="Agent on a Leash: interactive demo")
 LOCK = threading.RLock()
 ST: dict = {}
+
+# AP2: what the agent does with the shop-signed cart (the form edits are what it submits)
+AP2_ATTACKS = {
+    "": "honest",
+    "tamper": "changed the purchase after the shop signed it",
+    "replay": "re-presented the previous signed cart",
+    "wrong_shop_key": "brought a cart signed with another shop's key",
+    "wrong_agent_key": "signed with an agent key the customer never authorised",
+    "withhold": "withheld the shop-signed cart",
+}
 
 EDITABLE = ("timestamp", "currency", "delivery_fee", "customer_device_id", "recent_attempt_count_10m",
             "fulfillment_method", "order_returnable", "order_cancellable", "purchase_description",
@@ -55,7 +66,7 @@ def _to_form(pack, row: dict) -> dict:
     """Scenario row → the editable transaction shown in the page."""
     lines = row.get("_items") or pack.attempt_items.get(row["authorization_id"], [])
     m = _merchant(pack, row)
-    return {
+    form = {
         "source_id": row["authorization_id"],
         "merchant": {k: m.get(k, "") for k in ("merchant_id", "merchant_name", "merchant_category", "merchant_mcc",
                                                 "merchant_country", "merchant_city")},
@@ -63,6 +74,13 @@ def _to_form(pack, row: dict) -> dict:
                   for l in lines],
         **{k: row.get(k) for k in EDITABLE},
     }
+    if ST.get("ap2"):
+        # empty = the shop signs what its own product text says (shown as the placeholder)
+        for fl, l in zip(form["lines"], lines):
+            fl["signed"] = {"size": "", "return_window_days": ""}
+            fl["signed_default"] = shop_attributes(l)
+        form["ap2"] = {"attack": "", "returnable": ""}
+    return form
 
 
 def _from_form(pack, base: dict, form: dict) -> dict:
@@ -133,6 +151,42 @@ def _diff(before: dict, after: dict) -> list[str]:
     return out
 
 
+def _ap2_knobs(pack, form: dict, base: dict, idx: int, run: dict) -> tuple[dict, list[str]]:
+    """The demo form's AP2 block → the simulator's knobs (ap2.Ap2Sim), plus lines for the edit list."""
+    ap = form.get("ap2") or {}
+    knobs, notes = {}, []
+    attrs = {}
+    for n, l in enumerate(form["lines"], 1):
+        for k, v in (l.get("signed") or {}).items():
+            if str(v).strip():
+                attrs.setdefault(n, {})[k] = int(float(v)) if k == "return_window_days" else str(v).strip()
+                notes.append(f"shop signs line {n} {k.replace('_', ' ')} = {v}")
+    if attrs:
+        knobs["attributes"] = attrs
+    if ap.get("returnable"):
+        knobs["terms"] = {"returnable": ap["returnable"]}
+        notes.append(f"shop signs returnable = {ap['returnable']}")
+    attack = ap.get("attack") or ""
+    if attack not in AP2_ATTACKS:
+        raise HTTPException(422, "Unknown agent behaviour.")
+    if attack == "tamper":
+        knobs["signed_row"] = copy.deepcopy(base)
+    elif attack == "replay":
+        if idx == 0:
+            raise HTTPException(409, "There is no earlier signed cart to replay yet.")
+        knobs["replay_of"] = run["rows"][idx - 1]["authorization_id"]
+    elif attack == "wrong_shop_key":
+        mid = (form["merchant"].get("merchant_id") or "").strip()
+        knobs["merchant_key_of"] = next(m for m in sorted(pack.merchants) if m != mid)
+    elif attack == "wrong_agent_key":
+        knobs["wrong_agent_key"] = True
+    elif attack == "withhold":
+        knobs["withhold_checkout"] = True
+    if attack:
+        notes.append(f"agent {AP2_ATTACKS[attack]}")
+    return knobs, notes
+
+
 def _caps(rules: list[dict]) -> dict:
     per_order = [r["value"] for r in rules if r["field"] == "authorization.billing_amount_chf"]
     return {"per_order_chf": min(per_order) if per_order else None}
@@ -167,6 +221,7 @@ def _state() -> dict:
         "pending": [t for t in timeline if t["status"] == "pending"],
         "flags": list(ctl.merchant_flags.values()), "alerts": ctl.alerts[-6:],
         "revoked": ST["mandate"]["mandate_id"] in ctl.revoked_mandates,
+        "ap2": ST.get("ap2"), "ap2_attacks": AP2_ATTACKS, "resolutions": ST.get("resolutions", {}),
     }
 
 
@@ -174,6 +229,7 @@ def _state() -> dict:
 class StartIn(BaseModel):
     scenario_id: str
     instruction: str | None = None
+    ap2: bool = False
 
 
 class SendIn(BaseModel):
@@ -227,7 +283,7 @@ def catalogue():
 @app.post("/api/start")
 def start(body: StartIn):
     with LOCK:
-        s = Session(platform=SimPlatform(), use_llm=True)
+        s = Session(platform=SimPlatform(), use_llm=True, ap2=body.ap2)
         pack = s.pack
         if body.scenario_id not in pack.scenarios:
             raise HTTPException(404, "Unknown customer story.")
@@ -242,6 +298,7 @@ def start(body: StartIn):
         ST.update(session=s, run_id=info["run_id"], mandate=s.platform.get_mandate(m["mandate_id"]), draft=comp["draft"],
                   model=comp.get("model"),
                   backtest=comp["backtest"], customer_id=cust, original_rows=copy.deepcopy(rows), edits={},
+                  ap2=m.get("ap2"), resolutions={},
                   customer={"persona": pack.customers[cust]["persona_name"], "scenario_id": body.scenario_id,
                             "story": pack.scenarios[body.scenario_id]["scenario_name"], "card_id": card,
                             "profile": s.engine.profile(card).summary()})
@@ -266,6 +323,9 @@ def send(body: SendIn):
             raise HTTPException(409, "No purchase left. Compose another one.")
         original = _to_form(s.pack, run["rows"][idx])
         row = _from_form(s.pack, run["rows"][idx], body.transaction)
+        ap2_notes = []
+        if ST.get("ap2"):
+            row["_ap2"], ap2_notes = _ap2_knobs(s.pack, body.transaction, run["rows"][idx], idx, run)
         run["rows"][idx] = row
         env = s.platform.next_request(wait=0)
         if env is None:
@@ -273,7 +333,7 @@ def send(body: SendIn):
         errors = validation_errors(env["data"])
         result = s.handle(env)
         after = _to_form(s.pack, row)
-        edits = _diff(_to_form(s.pack, ST["original_rows"][idx]) if idx < len(ST["original_rows"]) else original, after)
+        edits = _diff(_to_form(s.pack, ST["original_rows"][idx]) if idx < len(ST["original_rows"]) else original, after) + ap2_notes
         ST["edits"][row["authorization_id"]] = edits
         ST["last_form"] = after
         ST["last"] = {
@@ -285,6 +345,7 @@ def send(body: SendIn):
             "api_body": {k: result[k] for k in ("authorization_id", "decision", "reason_codes", "customer_message", "engine_version")},
             "flags_created": [{"merchant_name": f["merchant_name"], "reason": f["reason"], "repeat": f.get("repeat")}
                               for f in result.get("flags_created", [])],
+            "ap2": result.get("ap2"), "ap2_receipt": (result.get("ap2_receipt") or {}).get("payload"),
         }
         return _state()
 
@@ -311,9 +372,13 @@ def compose():
 def resolve(body: ResolveIn):
     with LOCK:
         try:
-            _session().resolve(ST["run_id"], body.authorization_id, body.decision)
+            res = _session().resolve(ST["run_id"], body.authorization_id, body.decision)
         except (RevokedError, ValueError) as exc:
             raise HTTPException(409, str(exc))
+        if res.get("ap2"):
+            ST["resolutions"][body.authorization_id] = {
+                "receipt": res["ap2"]["receipt"]["payload"],
+                "signed": (res["ap2"].get("closed_payment_by_customer") or {}).get("payload")}
         return _state()
 
 

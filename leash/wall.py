@@ -52,6 +52,7 @@ class LineFacts:
     addon: str = "false"
     injection: InjectionReport = field(default_factory=InjectionReport)
     sources: dict = field(default_factory=dict)
+    matches: dict = field(default_factory=dict)   # fact → the exact words of the shop's text it was read from
 
     @property
     def walled_off(self) -> bool:
@@ -68,6 +69,8 @@ class LineFacts:
             "quasi_cash": self.quasi_cash,
             "addon": self.addon,
             "injection": self.injection.as_dict(),
+            "sources": dict(self.sources),
+            "matches": dict(self.matches),
         }
 
 
@@ -86,39 +89,54 @@ def canonical_size(system: str | None, raw: str) -> str:
     return str(int(num)) if num.is_integer() else str(num)
 
 
-def extract_line(line: dict) -> LineFacts:
+def extract_line(line: dict, wall: bool = True) -> LineFacts:
+    """`wall=False` is for the simulated shop describing its own product (ap2.py), never for us."""
     text = line.get("item_details") or ""
     facts = LineFacts(line_no=line.get("line_no", 0))
     facts.injection = detect(text)
     clean, _ = normalise(text)
 
-    sizes = {canonical_size((m.group(1) or "").lower() or None, m.group(2)) for m in RX_SIZE.finditer(clean)}
+    size_hits = list(RX_SIZE.finditer(clean))
+    sizes = {canonical_size((m.group(1) or "").lower() or None, m.group(2)) for m in size_hits}
     if len(sizes) == 1:
         facts.size = sizes.pop()
         facts.sources["size"] = "claimed"
+        facts.matches["size"] = size_hits[0].group(0)
+    elif len(sizes) > 1:
+        facts.matches["size"] = " / ".join(m.group(0) for m in size_hits) + " (conflicting)"
 
-    if RX_NO_RETURNS.search(clean):
+    if m := RX_NO_RETURNS.search(clean):
         facts.return_days, facts.final_sale = 0, "true"
-    elif RX_RETURNS_UNSTATED.search(clean):
+        facts.matches["return_days"] = facts.matches["final_sale"] = m.group(0)
+    elif m := RX_RETURNS_UNSTATED.search(clean):
         facts.return_days = UNKNOWN
+        facts.matches["return_days"] = m.group(0)
     else:
-        days = {int(m.group(1)) for rx in RX_RETURN_DAYS for m in rx.finditer(clean)}
+        found = [m for rx in RX_RETURN_DAYS for m in rx.finditer(clean)]
+        days = {int(m.group(1)) for m in found}
         if len(days) == 1:
             facts.return_days, facts.final_sale = days.pop(), "false"
+            facts.matches["return_days"] = facts.matches["final_sale"] = found[0].group(0)
+        elif len(days) > 1:
+            facts.matches["return_days"] = " / ".join(m.group(0) for m in found) + " (conflicting)"
     if facts.return_days != UNKNOWN:
         facts.sources["return_days"] = "claimed"
 
-    if RX_RECURRING.search(clean):
+    if m := RX_RECURRING.search(clean):
         facts.recurring_billing = "true"
+        facts.matches["recurring_billing"] = m.group(0)
     w = RX_WARRANTY.search(clean)
     if w:
         facts.warranty_months = int(w.group(1)) * (12 if w.group(2).lower() == "year" else 1)
-    if RX_QUASI_CASH.search(clean):
+        facts.matches["warranty_months"] = w.group(0)
+    if m := RX_QUASI_CASH.search(clean):
         facts.quasi_cash = "true"
-    if RX_ADDON.search(clean):
+        facts.matches["quasi_cash"] = m.group(0)
+    if m := RX_ADDON.search(clean):
         facts.addon = "true"
+        facts.matches["addon"] = m.group(0)
 
-    if facts.walled_off:
+    if wall and facts.walled_off:
         # Behind the wall: a text that talks to us cannot also be trusted for facts.
         facts.size = facts.return_days = facts.final_sale = facts.warranty_months = UNKNOWN
         facts.sources = {k: "withheld (injection)" for k in ("size", "return_days", "warranty_months")}

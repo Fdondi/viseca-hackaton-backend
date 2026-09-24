@@ -288,8 +288,20 @@ def grounded(instruction: str, rule: dict) -> bool:
     return True if rx is None else bool(re.search(rx, low))
 
 
-def review(instruction: str, existing: list[dict], proposed: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Keep only suggestions that add something, agree with the request, and are grounded in the customer's words."""
+def _in_requested_product(vals: list, existing: list[dict], pack) -> str | None:
+    """'27-inch' proposed as a fact, when the customer already picked '27-inch computer monitor'."""
+    names = [pack.items[i]["item_name"] for r in existing if r["field"] == "items.item_id" and r["operator"] in ("in", "=")
+             for i in (r["value"] if isinstance(r["value"], list) else [r["value"]]) if i in pack.items]
+    for n in names:
+        if vals and all(str(v).strip() and str(v).strip().lower() in n.lower() for v in vals):
+            return n
+    return None
+
+
+def review(instruction: str, existing: list[dict], proposed: list[dict],
+           safety_net: set[str] = frozenset()) -> tuple[list[dict], list[dict]]:
+    """Keep only suggestions that add something, agree with the request, and are grounded in the customer's words.
+    `safety_net`: fields of the always-on checks already in `existing`, so a duplicate of one says so."""
     have = {_key(r) for r in existing}
     fields_have = {r["field"] for r in existing}
     wanted = _requested_categories(existing)
@@ -311,6 +323,8 @@ def review(instruction: str, existing: list[dict], proposed: list[dict]) -> tupl
         elif r["field"] == "authorization.billing_amount_chf" and any(
                 isinstance(r["value"], (int, float)) and float(r["value"]) >= float(p["value"]) for p in periods):
             why = "implied by your limit over a period"
+        elif r["field"] in safety_net:
+            why = "already one of the always-on safety checks"
         elif _key(r) in have or (r["field"] in fields_have and r["field"] not in ("items.item_category",)):
             why = "already covered by a rule from your words"
         elif r["field"] == "items.item_category" and op == "not_in" and wanted & set(map(str, vals)):
@@ -323,6 +337,10 @@ def review(instruction: str, existing: list[dict], proposed: list[dict]) -> tupl
             why = "a period limit without a period length"
         elif r["field"] == "authorization.order_returnable" and any(e["field"] == "extracted.return_days" for e in existing):
             why = "implied by your return-window rule"
+        elif r["field"].startswith("extracted.") and (named := _in_requested_product(vals, existing, pack)):
+            why = f"already part of the product you asked for ({named})"
+        elif r["field"] == "extracted.size" and any(canonical_size(None, str(v)) == UNKNOWN for v in vals):
+            why = "not a clothing or shoe size, which is what this check compares"
         elif not grounded(instruction, r):
             why = "nothing in your words asks for this"
         elif isinstance(r["value"], (int, float)) and not isinstance(r["value"], bool) \
@@ -339,10 +357,13 @@ def review(instruction: str, existing: list[dict], proposed: list[dict]) -> tupl
 
 def augment(draft: Draft, categories: list[str]) -> Draft:
     proposed = propose_rules(draft.instruction, draft, categories)
-    kept, dropped = review(draft.instruction, draft.hard_rules, proposed)
+    safety = {n["rule"]["field"] for n in draft.notes if n["tier"] == "safety net"}
+    kept, dropped = review(draft.instruction, draft.hard_rules, proposed, safety)
     for r in kept:
         draft.add(r, "suggested by AI — please review", "llm")
     STATUS["last_review"] = {"proposed": len(proposed), "kept": kept, "dropped": dropped}
+    from .compiler import refresh_gaps
+    refresh_gaps(draft, grounded)   # the questions follow the final rules, model suggestions included
     return draft
 
 

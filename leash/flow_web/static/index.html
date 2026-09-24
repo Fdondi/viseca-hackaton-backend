@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Leash Flow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root{--paper:#F2F4F3;--surface:#FFFFFF;--ink:#15201E;--muted:#5A6966;--rule:#D3DBD9;--accent:#0E5A66;--accent-soft:#E1ECEC;
+--ok:#2E7A4C;--ok-soft:#E3F0E7;--ask:#A86C12;--ask-soft:#F6ECDA;--no:#B0362C;--no-soft:#F6E2DF;
+--llm:#6B4FA3;--llm-soft:#EEE9F6;--free:#B5760F;--free-soft:#FAF0DC;--signed:#2F5FA8;--signed-soft:#E3EBF7;--viseca:#6A7471;--viseca-soft:#ECEFEE;
+--fixed:#0E5A66;--phone:#15201E;
+--display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;--body:"Instrument Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--paper:#0F1615;--surface:#16201F;--ink:#E2EAE8;--muted:#95A6A2;--rule:#2A3735;--accent:#63B6C2;--accent-soft:#1B2F31;
+--ok:#6CC08C;--ok-soft:#18291F;--ask:#E0A94F;--ask-soft:#2E2515;--no:#EA7B70;--no-soft:#321B18;
+--llm:#B7A0E6;--llm-soft:#261F35;--free:#E0A94F;--free-soft:#2E2515;--signed:#86A9E6;--signed-soft:#1A2436;--viseca:#A3AEAB;--viseca-soft:#1F2927;--fixed:#63B6C2;--phone:#000;color-scheme:dark}}
+:root[data-theme="dark"]{--paper:#0F1615;--surface:#16201F;--ink:#E2EAE8;--muted:#95A6A2;--rule:#2A3735;--accent:#63B6C2;--accent-soft:#1B2F31;
+--ok:#6CC08C;--ok-soft:#18291F;--ask:#E0A94F;--ask-soft:#2E2515;--no:#EA7B70;--no-soft:#321B18;
+--llm:#B7A0E6;--llm-soft:#261F35;--free:#E0A94F;--free-soft:#2E2515;--signed:#86A9E6;--signed-soft:#1A2436;--viseca:#A3AEAB;--viseca-soft:#1F2927;--fixed:#63B6C2;--phone:#000;color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.5 var(--body)}
+header{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between;padding:12px 20px;background:var(--surface);border-bottom:1px solid var(--rule)}
+header h1{font:700 19px/1 var(--display);margin:0}
+.sub{color:var(--muted);font-size:13px}
+.legend{display:flex;flex-wrap:wrap;gap:6px}
+.lg{font:600 11px/1 var(--mono);padding:6px 8px;border-radius:6px;border:1.5px solid;white-space:nowrap}
+.lg.llm{border:1.5px dashed var(--llm);color:var(--llm);background:var(--llm-soft)}
+.lg.fixed{border-color:var(--fixed);color:var(--fixed)}
+.lg.free_text{border-color:var(--free);color:var(--free);background:repeating-linear-gradient(135deg,var(--free-soft) 0 6px,transparent 6px 10px)}
+.lg.structured{border-color:var(--rule);color:var(--ink);background:var(--surface)}
+.lg.signed{border-color:var(--signed);color:var(--signed);background:var(--signed-soft)}
+.lg.viseca{border-color:var(--viseca);color:var(--viseca);background:var(--viseca-soft)}
+.lg.customer{border-color:var(--ink);color:var(--ink)}
+main{display:grid;grid-template-columns:390px minmax(0,1fr);grid-template-areas:"phone agent" "phone server";gap:22px;padding:20px;max-width:2000px;margin:0 auto;align-items:start}
+@media (max-width:1000px){main{grid-template-columns:1fr;grid-template-areas:"phone" "agent" "server";padding:16px}}
+.phone-col{grid-area:phone}#agent-area{grid-area:agent}.dia{grid-area:server}
+.area-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px}
+.area-h .n{font:700 12px/1 var(--mono);color:var(--surface);background:var(--ink);border-radius:999px;padding:4px 8px}
+.area-h h2{font:650 19px/1.2 var(--display);margin:0}
+.area-h .io{font:600 11px/1.3 var(--mono);color:var(--muted)}
+.phone-wrap{display:flex;flex-direction:column;gap:10px;align-items:center}
+/* ------------------------------------------------ phone */
+.phone-col{position:sticky;top:16px;display:flex;justify-content:center;align-self:start}
+@media (max-width:1000px){.phone-col{position:static}}
+.phone{width:360px;max-width:100%;height:760px;background:var(--phone);border-radius:48px;padding:12px;box-shadow:0 20px 50px rgba(0,0,0,.18)}
+.screen{position:relative;height:100%;background:var(--paper);border-radius:37px;overflow:hidden;display:flex;flex-direction:column}
+.status{display:flex;justify-content:space-between;align-items:center;padding:12px 26px 6px;font:600 12px/1 var(--body)}
+.notch{width:110px;height:26px;background:var(--phone);border-radius:0 0 16px 16px;margin:-12px auto 0}
+.appbar{display:flex;align-items:center;justify-content:space-between;padding:6px 18px 10px;border-bottom:1px solid var(--rule)}
+.appbar b{font:700 17px/1 var(--display)}
+.appbody{flex:1;overflow:auto;padding:14px 16px 20px;display:flex;flex-direction:column;gap:12px}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.card h3{font:650 15px/1.25 var(--display);margin:0}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;color:var(--muted)}
+label.check{flex-direction:row;gap:8px;align-items:flex-start;font-weight:400;font-size:13px;color:var(--ink)}
+label.check input{width:auto;margin-top:3px}
+input,select,textarea{font:inherit;color:var(--ink);background:var(--paper);border:1px solid var(--rule);border-radius:9px;padding:8px 10px;width:100%;min-width:0}
+textarea{min-height:120px;resize:vertical;line-height:1.45}
+button{font:600 13.5px/1 var(--body);border-radius:10px;padding:11px 14px;border:1px solid var(--accent);background:var(--accent);color:var(--surface);cursor:pointer}
+button.ghost{background:transparent;color:var(--accent)}
+button.ok{background:var(--ok);border-color:var(--ok)}button.no{background:var(--no);border-color:var(--no)}
+button.sm{padding:7px 10px;font-size:12.5px}
+button:disabled{opacity:.45;cursor:not-allowed}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.note{color:var(--muted);font-size:12.5px}
+.mono{font-family:var(--mono);font-size:11.5px}
+.pill{display:inline-flex;font:600 10px/1 var(--mono);letter-spacing:.05em;text-transform:uppercase;padding:4px 7px;border-radius:999px;white-space:nowrap}
+.pill.approve,.pill.approved,.pill.pass{color:var(--ok);background:var(--ok-soft)}
+.pill.step_up,.pill.pending,.pill.unknown{color:var(--ask);background:var(--ask-soft)}
+.pill.decline,.pill.declined,.pill.expired,.pill.fail{color:var(--no);background:var(--no-soft)}
+.pill.llm{color:var(--llm);background:var(--llm-soft)}.pill.free{color:var(--free);background:var(--free-soft)}
+.pill.tx{color:var(--ink);background:var(--paper);border:1px solid var(--rule)}
+.pill.signed{color:var(--signed);background:var(--signed-soft)}.pill.fixed{color:var(--fixed);background:var(--accent-soft)}
+.ruleform{border:1px solid var(--rule);border-radius:10px;padding:9px 10px;display:flex;flex-direction:column;gap:6px;background:var(--surface)}
+.ruleform.ai{border:1.5px dashed var(--llm)}
+.ruleform.removed{opacity:.45}
+.ruleform .txt{font-size:13px}
+.src{font-size:11.5px;color:var(--muted)}
+.src q{font-style:italic;color:var(--ink)}
+/* system notification: drawn by the OS over whatever app is open, not part of Viseca one's screen */
+.banner{position:absolute;z-index:5;top:34px;left:8px;right:8px;display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:10px;align-items:start;
+  padding:10px 10px 11px 12px;border-radius:20px;cursor:pointer;color:#15201E;background:rgba(246,246,246,.86);
+  -webkit-backdrop-filter:blur(18px) saturate(1.6);backdrop-filter:blur(18px) saturate(1.6);box-shadow:0 10px 30px rgba(0,0,0,.28);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-reduced-motion:no-preference){.banner{animation:drop .45s cubic-bezier(.2,.9,.3,1.2)}@keyframes drop{from{transform:translateY(-120%);opacity:0}}}
+.banner .icon{width:38px;height:38px;border-radius:9px;background:#0E5A66;color:#fff;display:grid;place-items:center;font:700 17px/1 var(--display)}
+.banner .app{display:flex;justify-content:space-between;font-size:11.5px;color:#5A6966;text-transform:uppercase;letter-spacing:.02em}
+.banner b{display:block;font-size:13.5px;line-height:1.3;margin-top:2px}
+.banner p{margin:1px 0 0;font-size:13px;line-height:1.35}
+.banner .x{all:unset;cursor:pointer;color:#5A6966;font-size:15px;padding:0 4px;line-height:1}
+.outcome{font:700 26px/1.1 var(--display);padding:12px 14px;border-radius:14px}
+.outcome.approved{color:var(--ok);background:var(--ok-soft)}.outcome.declined{color:var(--no);background:var(--no-soft)}
+.outcome.expired{color:var(--no);background:var(--no-soft)}
+.act{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:8px 2px;border-bottom:1px solid var(--rule);font-size:12.5px}
+.verb{border-left:3px solid var(--free);background:var(--free-soft);padding:7px 10px;font:12px/1.5 var(--mono);border-radius:0 6px 6px 0;overflow-wrap:anywhere}
+.verb small{display:block;font:600 10px/1.4 var(--body);letter-spacing:.06em;text-transform:uppercase;color:var(--free)}
+/* ------------------------------------------------ agent (black box) */
+.agent{border:2px solid var(--ink)}
+.bb{display:grid;grid-template-columns:minmax(260px,340px) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:1100px){.bb{grid-template-columns:1fr}}
+.bbox{background:var(--ink);color:var(--paper);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.bbox .note{color:color-mix(in srgb,var(--paper) 70%,transparent)}
+.bbox label.check{color:var(--paper)}
+.bbox button{background:var(--paper);color:var(--ink);border-color:var(--paper)}
+.sent{display:flex;flex-direction:column;gap:4px}
+.sent button{all:unset;cursor:pointer;display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 8px;border-radius:6px;border:1px solid var(--rule);font:12px/1.3 var(--mono)}
+.sent button.sel{border-color:var(--accent);background:var(--accent-soft)}
+pre.json.req{columns:3 320px;column-gap:28px;column-rule:1px solid var(--rule);max-height:none;white-space:pre-wrap}
+.msg{display:flex;align-items:center;gap:10px;font:600 12px/1.3 var(--mono);color:var(--muted)}
+.msg::before{content:"";flex:0 0 40px;border-top:1.5px solid var(--muted)}
+.notif{cursor:pointer;text-align:left;background:var(--surface);color:var(--ink);border:1px solid var(--rule);border-radius:14px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;font-weight:400;line-height:1.4}
+.notif.sel{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.notif .top{display:flex;justify-content:space-between;gap:8px;align-items:center;font:600 11.5px/1.2 var(--mono);color:var(--muted)}
+details summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:12.5px}
+/* ------------------------------------------------ diagram */
+.dia{display:flex;flex-direction:column;gap:18px;min-width:0}
+.panel{background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.eyebrow{font:600 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+h2{font:650 19px/1.2 var(--display);margin:0}
+.chain{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px 34px;align-items:stretch}
+.chain .uml:nth-child(3n)::after,.chain .uml:nth-child(3n)::before{display:none}
+@media (max-width:700px){.chain{grid-template-columns:1fr}}
+.uml{position:relative;border:1.5px solid var(--fixed);border-radius:4px;background:var(--surface);min-width:0;font-size:12.5px}
+.uml.llm{border:1.5px dashed var(--llm);background:var(--llm-soft)}
+.uml.customer{border-color:var(--ink)}
+.uml.viseca{border-color:var(--viseca)}
+.uml.signed{border-color:var(--signed)}
+.uml.off{opacity:.55}
+.uml > .hd{padding:6px 10px;border-bottom:1px solid var(--rule);text-align:center}
+.uml > .hd .st{display:block;font:600 10.5px/1.3 var(--mono);color:var(--muted)}
+.uml.llm > .hd .st{color:var(--llm)}
+.uml > .hd b{font:650 13px/1.3 var(--display)}
+.uml > .cp{padding:6px 10px;border-top:1px solid var(--rule);display:flex;flex-direction:column;gap:3px}
+.uml > .cp:first-of-type{border-top:0}
+.chain .uml{overflow:visible;font-size:13px}
+.chain .uml:not(:last-child)::after{content:"";position:absolute;right:-26px;top:50%;width:22px;border-top:1.5px solid var(--muted)}
+.chain .uml:not(:last-child)::before{content:"";position:absolute;right:-27px;top:calc(50% - 4px);border:4.5px solid transparent;border-left:6px solid var(--muted)}
+@media (max-width:700px){.chain .uml::after,.chain .uml::before{display:none}}
+.flow{position:relative;display:grid;grid-template-columns:minmax(260px,1.05fr) minmax(210px,.8fr) minmax(300px,1.25fr);gap:44px;align-items:start}
+@media (max-width:1300px){.flow{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.flow .checks-col{grid-column:1 / -1}}
+@media (max-width:760px){.flow{grid-template-columns:1fr;gap:16px}}
+.colh{font:600 11px/1.3 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.col{display:flex;flex-direction:column;gap:12px;min-width:0}
+.f{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);gap:8px;padding:2px 5px;border-radius:4px;font:11.5px/1.4 var(--mono);align-items:baseline}
+.f .k{color:var(--muted);white-space:nowrap}
+.f .v{overflow-wrap:anywhere;text-align:right}
+.f.free_text{background:repeating-linear-gradient(135deg,var(--free-soft) 0 6px,transparent 6px 10px);outline:1px solid var(--free)}
+.f.free_text .v{text-align:left;grid-column:1 / -1}
+.f.signed{background:var(--signed-soft)}
+.f.customer .k{color:var(--ink)}
+.f.viseca{background:var(--viseca-soft)}
+.f.node{grid-template-columns:minmax(0,1fr) auto}.f.node .k{white-space:normal}
+.f.llmfact{outline:1.5px dashed var(--llm);background:var(--llm-soft)}
+.f.hot{box-shadow:0 0 0 2px var(--accent);background:var(--accent-soft)}
+.f.free_text.hot{box-shadow:0 0 0 2px var(--free)}
+.grp{font:600 10px/1.2 var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:4px}
+.chk{cursor:pointer;border:1.5px solid var(--fixed);border-radius:4px;background:var(--surface);font-size:12.5px}
+.chk.sel{box-shadow:0 0 0 3px var(--accent-soft);border-width:2px}
+.chk .hd{display:flex;justify-content:space-between;gap:8px;align-items:flex-start;padding:6px 9px;border-bottom:1px solid var(--rule)}
+.chk .hd .st{display:block;font:600 10.5px/1.3 var(--mono);color:var(--muted)}
+.chk .hd .st.llm{color:var(--llm)}
+.chk .hd code{font:600 11.5px/1.35 var(--mono);overflow-wrap:anywhere}
+.chk .bd{padding:6px 9px;display:flex;flex-direction:column;gap:5px}
+.chk .how{font:11px/1.35 var(--mono);color:var(--muted)}
+.chk.fail{border-left:5px solid var(--no)}.chk.unknown{border-left:5px solid var(--ask)}.chk.pass{border-left:5px solid var(--ok)}
+.chk:not(.sel) .bd .detail{display:none}
+.chk.ap2fx{box-shadow:0 0 0 2px var(--signed)}
+.chk.ap2fx.sel{box-shadow:0 0 0 2px var(--signed),0 0 0 6px var(--signed-soft)}
+.fx{border:2px solid var(--signed);background:var(--signed-soft);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.fx.off{border:2px dashed var(--rule);background:var(--paper)}
+.fx h3{margin:0;font:650 15px/1.25 var(--display)}
+.fxg{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
+.fxg > div{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:4px;font-size:12.5px}
+.fxg h4{margin:0;font:600 10.5px/1.2 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--signed)}
+.vs{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px}
+.st-pass{color:var(--ok)}.st-fail{color:var(--no)}.st-unknown{color:var(--ask)}
+.rir{display:grid;grid-template-columns:52px minmax(0,1fr);gap:6px 8px;align-items:baseline}
+.rir > .lbl{font:600 10px/1.6 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.rir code{font:11px/1.35 var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.ins{display:flex;flex-wrap:wrap;gap:4px}
+.in{display:inline-flex;gap:5px;align-items:baseline;border:1px solid var(--rule);border-radius:5px;padding:2px 6px;font:11px/1.35 var(--mono);max-width:100%;overflow-wrap:anywhere}
+.in .l{color:var(--muted)}
+.in .from{display:block;width:100%;color:var(--muted);font-size:10.5px}
+.in{flex-wrap:wrap}
+.in.free_text{flex-basis:100%}
+ol.trace{margin:0;padding-left:18px;font:11.5px/1.45 var(--mono);display:flex;flex-direction:column;gap:2px}
+ol.trace li::marker{color:var(--muted)}
+.in.free_text{border-color:var(--free);background:repeating-linear-gradient(135deg,var(--free-soft) 0 6px,transparent 6px 10px)}
+.in.wall{border-color:var(--fixed);background:var(--accent-soft)}
+.in.llm{border:1px dashed var(--llm);background:var(--llm-soft)}
+.in.signed{border-color:var(--signed);background:var(--signed-soft)}
+.in.viseca{border-color:var(--viseca);background:var(--viseca-soft)}
+.in.customer{border-color:var(--ink)}
+/* the request, laid out */
+.reqv{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.sec{border:1px solid var(--rule);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.sec h4{margin:0;font:600 10.5px/1.2 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--accent)}
+.sec.wide{grid-column:1 / -1}
+dl.kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 12px;margin:0;font-size:12.5px}
+dl.kv dt{color:var(--muted)}dl.kv dd{margin:0;overflow-wrap:anywhere}
+table.bk{border-collapse:collapse;width:100%;font-size:12.5px}
+table.bk td,table.bk th{padding:5px 6px;border-bottom:1px solid var(--rule);text-align:left;vertical-align:top}
+table.bk th{font:600 10px/1.3 var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+table.bk td.num,table.bk th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tot{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px 18px;font-size:12.5px}
+.tot b{font:650 16px/1 var(--display)}
+ol.rules{margin:0;padding-left:20px;font-size:12.5px;columns:2 300px;column-gap:28px}
+ol.rules li{margin-bottom:2px;break-inside:avoid}
+.ans{display:flex;flex-direction:column;gap:6px;border:1px solid var(--rule);border-radius:8px;padding:10px 12px}
+.codes{display:flex;flex-wrap:wrap;gap:4px}.codes span{font:11px/1 var(--mono);padding:4px 6px;border-radius:4px;background:var(--paper);border:1px solid var(--rule)}
+.comb{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+@media (max-width:900px){.comb{grid-template-columns:1fr}}
+.branch{display:flex;flex-direction:column;gap:4px;font:12px/1.4 var(--mono)}
+.branch div{padding:5px 8px;border-radius:4px;border:1px solid var(--rule);color:var(--muted)}
+.branch div.on{border-color:var(--accent);background:var(--accent-soft);color:var(--ink);font-weight:600}
+.verdict{font:700 26px/1 var(--display)}
+.verdict.approve{color:var(--ok)}.verdict.step_up{color:var(--ask)}.verdict.decline{color:var(--no)}
+pre.json{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;font:11px/1.45 var(--mono);background:var(--paper);border-radius:6px;padding:8px;max-height:260px;overflow:auto}
+svg#wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+svg#wires path{fill:none;stroke-width:1.6}
+.w-structured{stroke:var(--accent)}.w-free_text{stroke:var(--free);stroke-dasharray:5 3}.w-signed{stroke:var(--signed)}
+.w-viseca{stroke:var(--viseca)}.w-customer{stroke:var(--ink)}.w-hop{stroke:var(--free);stroke-dasharray:2 3;opacity:.8}
+.empty{color:var(--muted);font-size:13.5px}
+.nomodel{border:1.5px dashed var(--llm);border-radius:6px;padding:8px 10px;color:var(--llm);font-size:12.5px;background:var(--llm-soft)}
+.toast{position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:8px;font-size:13.5px;max-width:90vw;z-index:10}
+</style>
+</head>
+<body>
+<header>
+  <div class="row"><h1>Agent on a Leash</h1><span class="sub">what the wallet receives, and how each rule is decided</span></div>
+  <div class="legend">
+    <span class="lg llm">LLM</span><span class="lg fixed">fixed code</span>
+    <span class="lg free_text">vendor-supplied text · untrusted</span><span class="lg structured">transaction data</span>
+    <span class="lg signed">shop-signed (AP2)</span><span class="lg viseca">Viseca's records</span><span class="lg customer">customer</span>
+  </div>
+</header>
+<main>
+  <div class="phone-col"><div class="phone-wrap">
+    <div class="area-h"><span class="n">1</span><h2>Customer's phone</h2></div>
+    <div class="phone"><div class="screen">
+      <div class="notch"></div>
+      <div class="banner" id="banner" role="button" tabindex="0" hidden></div>
+      <div class="status"><span>9:41</span><span>Viseca one</span><span>●●● ▮</span></div>
+      <div class="appbar"><b id="apptitle">Your shopping agent</b><button class="ghost sm" id="restart" hidden>Start over</button></div>
+      <div class="appbody" id="app"></div>
+    </div></div>
+    <span class="io note" style="max-width:340px;text-align:center">Sets the rules once. After that it only hears from the wallet when a purchase needs the customer.</span>
+  </div></div>
+  <section class="panel agent" id="agent-area">
+    <div class="area-h"><span class="n">2</span><h2>Shopping agent</h2><span class="io">«black box» · third party · we only see what it sends</span></div>
+    <div id="agent"></div>
+  </section>
+  <div class="dia">
+    <div class="area-h"><span class="n">3</span><h2>Viseca server</h2><span class="io">receives the agent's proposals · answers the agent · notifies the phone only to ask</span></div>
+    <section class="panel" id="setup-panel">
+      <div class="eyebrow">Setup · from the customer's words to confirmed rules</div>
+      <div id="setup"></div>
+    </section>
+    <section class="panel" id="flow-panel">
+      <div class="row" style="justify-content:space-between"><div class="eyebrow" id="flow-title">A proposal · what arrived and how it was decided</div><span class="note" id="flow-note"></span></div>
+      <div id="flow"></div>
+    </section>
+  </div>
+</main>
+<div class="toast" id="toast" hidden></div>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const WORD = {approve:"Approved", step_up:"Asks you", decline:"Declined"};
+const LABEL = {approve:"approved", step_up:"asks you", decline:"declined", approved:"approved", declined:"declined", pending:"waiting", expired:"expired"};
+let ST = null, PEOPLE = [], SEL = null, SELR = null, EDITS = {}, OPEN = null, SEEN = new Set(), AP2 = false;
+function toast(m){ const t=$("#toast"); t.textContent=m; t.hidden=false; clearTimeout(t._h); t._h=setTimeout(()=>t.hidden=true,3500); }
+async function api(path, body){
+  const r = await fetch(path, body === undefined ? {} : {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : r.statusText);
+  return j;
+}
+// JSON with short objects and arrays kept on one line (one rule per line), everything else indented
+function oneLine(v){
+  if(v === null || typeof v !== "object") return JSON.stringify(v);
+  if(Array.isArray(v)) return "[" + v.map(oneLine).join(", ") + "]";
+  return "{" + Object.entries(v).map(([k, x]) => `${JSON.stringify(k)}: ${oneLine(x)}`).join(", ") + "}";
+}
+function compact(v, ind = ""){
+  const one = oneLine(v);
+  if(v === null || typeof v !== "object" || one.length <= 120) return one;
+  const nx = ind + "  ";
+  if(Array.isArray(v)) return "[\n" + v.map(x => nx + compact(x, nx)).join(",\n") + "\n" + ind + "]";
+  return "{\n" + Object.entries(v).map(([k, x]) => `${nx}${JSON.stringify(k)}: ${compact(x, nx)}`).join(",\n") + "\n" + ind + "}";
+}
+const fmt = v => v === null || v === undefined ? "null" : typeof v === "number" ? String(v) : typeof v === "object" ? JSON.stringify(v) : String(v);
+
+// ------------------------------------------------------------------ phone
+function renderBanner(){
+  const b = $("#banner");
+  const waiting = ST && ST.feed ? ST.feed.filter(f => f.status === "pending" && !SEEN.has(f.authorization_id) && f.authorization_id !== OPEN) : [];
+  const f = waiting[waiting.length - 1];
+  if(!f){ b.hidden = true; b.dataset.id = ""; return; }
+  if(b.dataset.id === f.authorization_id && !b.hidden) return;   // don't replay the slide-in on every render
+  b.dataset.id = f.authorization_id;
+  b.innerHTML = `<span class="icon">V</span>
+    <span><span class="app"><span>Viseca one</span><span>now</span></span>
+      <b>Please confirm CHF ${Number(f.amount_chf).toFixed(2)} at ${esc(f.merchant)}</b>
+      <p>Your shopping agent's purchase needs you. Tap to review.${waiting.length > 1 ? ` (+${waiting.length - 1} more)` : ""}</p></span>
+    <button class="x" aria-label="Dismiss" data-dismiss="1">×</button>`;
+  b.hidden = false;
+}
+$("#banner").addEventListener("click", ev => {
+  const id = $("#banner").dataset.id; if(!id) return;
+  SEEN.add(id);
+  if(!ev.target.closest("[data-dismiss]")) OPEN = id;   // tap opens the purchase page; × just dismisses
+  renderPhone();
+});
+$("#banner").addEventListener("keydown", ev => { if(ev.key === "Enter" || ev.key === " "){ ev.preventDefault(); $("#banner").click(); } });
+function renderPhone(){
+  renderBanner();
+  const step = ST ? ST.step : "setup";
+  $("#restart").hidden = step === "setup";
+  if(step === "setup"){
+    $("#apptitle").textContent = "New shopping agent";
+    const cur = SEL || PEOPLE[0];
+    $("#app").innerHTML = `
+      <div class="card"><h3>Whose card?</h3>
+        <select id="who">${PEOPLE.map(p => `<option value="${p.scenario_id}" ${cur && p.scenario_id===cur.scenario_id?"selected":""}>${esc(p.persona)} · ${esc(p.story)}</option>`).join("")}</select></div>
+      <div class="card"><h3>What may your agent buy?</h3>
+        <textarea id="instr">${esc(cur ? cur.instruction : "")}</textarea>
+        <button id="compile">Set up my agent</button>
+        <span class="note">Your words are turned into rules you check on the next screen.</span></div>`;
+    $("#who").onchange = () => { SEL = PEOPLE.find(p => p.scenario_id === $("#who").value); $("#instr").value = SEL.instruction; };
+    $("#compile").onclick = async ev => {
+      ev.target.disabled = true; ev.target.textContent = "Reading your words…";
+      try{ ST = await api("/api/compile", {scenario_id:$("#who").value, instruction:$("#instr").value}); EDITS = {}; render(); }
+      catch(e){ toast(e.message); ev.target.disabled = false; ev.target.textContent = "Set up my agent"; }
+    };
+    return;
+  }
+  if(step === "review"){
+    $("#apptitle").textContent = "Check your rules";
+    const editable = ST.notes.filter(n => n.tier === "your rules" || n.tier.startsWith("suggested"));
+    const always = ST.notes.filter(n => n.tier === "safety net");
+    const input = n => {
+      const v = EDITS[n.index] && EDITS[n.index].value !== undefined ? EDITS[n.index].value : n.rule.value;
+      if(typeof n.rule.value === "number") return `<input type="number" step="any" data-idx="${n.index}" value="${esc(v)}">`;
+      if(Array.isArray(n.rule.value)) return `<input data-idx="${n.index}" value="${esc(Array.isArray(v) ? v.join(", ") : v)}">`;
+      return `<input data-idx="${n.index}" value="${esc(v)}">`;
+    };
+    $("#app").innerHTML = `
+      <div class="card"><h3>${esc(ST.customer.persona)}</h3><span class="note">${esc(ST.setup.instruction)}</span></div>
+      ${editable.map(n => { const ai = n.tier.startsWith("suggested"), rm = EDITS[n.index] && EDITS[n.index].removed; return `
+        <div class="ruleform ${ai?"ai":""} ${rm?"removed":""}">
+          <div class="txt">${esc(n.text)}</div>
+          <div class="src">${ai ? `<span class="pill llm">AI suggestion</span> not in your words directly; kept after review` : `from your words: <q>${esc(n.source)}</q>`}</div>
+          <div class="row" style="flex-wrap:nowrap"><span class="mono" style="white-space:nowrap">${esc(n.rule.field.split(".").pop())} ${esc(n.rule.operator)}</span>${input(n)}
+            <button class="ghost sm" data-rm="${n.index}">${rm ? "Keep" : "Remove"}</button></div>
+        </div>`; }).join("")}
+      <div class="card"><label>If the wallet can't tell
+        <select id="policy">${[["ask","ask me"],["decline","decline"],["approve","approve (manipulation still asks)"]].map(([v,l]) => `<option value="${v}" ${ST.policy===v?"selected":""}>${l}</option>`).join("")}</select></label>
+        <details><summary>${always.length} always-on safety checks</summary><ul class="note" style="padding-left:18px;margin:6px 0 0">${always.map(n => `<li>${esc(n.text)}</li>`).join("")}</ul></details>
+        <span class="note">${esc(ST.setup.backtest)}</span>
+        <button id="confirm">Confirm</button></div>`;
+    $("#app").querySelectorAll("input[data-idx]").forEach(el => el.oninput = () => { EDITS[el.dataset.idx] = {...(EDITS[el.dataset.idx]||{}), value: el.value}; });
+    $("#app").querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { const i = b.dataset.rm; EDITS[i] = {...(EDITS[i]||{}), removed: !(EDITS[i] && EDITS[i].removed)}; renderPhone(); });
+    $("#confirm").onclick = async () => {
+      const edits = Object.entries(EDITS).map(([i, e]) => ({index:+i, value: e.value, removed: !!e.removed}));
+      try{ ST = await api("/api/confirm", {edits, uncertainty_policy:$("#policy").value}); render(); toast("Confirmed. Your agent can shop."); }
+      catch(e){ toast(e.message); }
+    };
+    return;
+  }
+  const open = OPEN && ST.feed.find(f => f.authorization_id === OPEN);
+  if(open){
+    // one purchase: the page a notification opens, or a tap in recent activity
+    const byYou = open.decision === "step_up" && open.status !== "pending";
+    const outcome = open.status === "pending" ? null
+      : byYou ? {cls: open.status, word: open.status === "approved" ? "You approved it" : open.status === "declined" ? "You declined it" : "Expired: nobody answered"}
+      : {cls: open.status, word: open.status === "approved" ? "Approved" : "Declined"};
+    const fails = open.reasons.filter(r => r.status === "fail"), unsure = open.reasons.filter(r => r.status !== "fail");
+    const list = rs => `<ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:13px">${rs.map(r => `<li>${esc(r.text)}</li>`).join("")}</ul>`;
+    const why = open.status === "pending" || byYou
+      ? `<div class="card"><h3>${open.status === "pending" ? "Why we're asking" : "Why we asked you"}</h3>${list(open.reasons)}</div>`
+      : open.status === "declined"
+        ? `<div class="card"><h3>Why we declined</h3>${list(fails.length ? fails : unsure)}</div>
+           ${fails.length && unsure.length ? `<div class="card"><h3>Also noticed</h3>${list(unsure)}</div>` : ""}`
+        : `<div class="card"><h3>Why it went through</h3><span style="font-size:13px">All ${open.passed} checks passed under the rules you confirmed.</span>
+           ${unsure.length ? list(unsure) : ""}</div>`;
+    $("#apptitle").textContent = open.status === "pending" ? "Confirm this purchase?" : "Purchase";
+    $("#app").innerHTML = `
+      <button class="ghost sm" id="back" style="align-self:flex-start">‹ Back</button>
+      ${outcome ? `<div class="outcome ${outcome.cls}">${esc(outcome.word)}</div>` : ""}
+      <div class="card"><span class="note">${open.status === "pending" ? "Your agent wants to pay" : outcome.cls === "approved" ? "Your agent paid" : "Your agent tried to pay"}</span>
+        <h3 style="font-size:22px">CHF ${Number(open.amount_chf).toFixed(2)}</h3>
+        <span>${esc(open.merchant)}</span><span class="note">${esc(open.items.join(", "))}</span></div>
+      ${why}
+      ${open.shop_text.map(t => `<div class="verb"><small>Provided by the shop · shown exactly as written</small>${esc(t.text)}</div>`).join("")}
+      ${open.status === "pending"
+        ? `<div class="row" style="flex-wrap:nowrap"><button class="ok" style="flex:1" data-res="approve" data-id="${open.authorization_id}">Approve</button><button class="no" style="flex:1" data-res="decline" data-id="${open.authorization_id}">Decline</button></div>` : ""}`;
+    $("#back").onclick = () => { OPEN = null; renderPhone(); };
+    return;
+  }
+  $("#apptitle").textContent = "Your shopping agent";
+  const counts = {approve:0, step_up:0, decline:0}; ST.feed.forEach(f => counts[f.decision]++);
+  $("#app").innerHTML = `
+    <div class="card"><h3>Your agent is shopping</h3>
+      <span class="note">Under the ${ST.setup.rules} rules you confirmed. You only hear from us when a purchase needs you.</span>
+      <span class="mono">${counts.approve} approved · ${counts.step_up} asked you · ${counts.decline} declined</span></div>
+    ${ST.feed.length ? `<div class="card"><h3>Recent activity</h3>${ST.feed.slice().reverse().map(f => `
+      <div class="act" data-open="${f.authorization_id}" role="button" tabindex="0" style="cursor:pointer"><span>${esc(f.merchant)} · CHF ${Number(f.amount_chf).toFixed(2)}</span>
+        <span class="pill ${f.status}">${esc(LABEL[f.status] || f.status)}${f.resolved_by ? " by you" : ""}</span></div>`).join("")}</div>` : ""}`;
+}
+$("#app").addEventListener("click", async ev => {
+  const r = ev.target.closest("[data-res]");
+  if(r){ try{ ST = await api("/api/resolve", {authorization_id:r.dataset.id, decision:r.dataset.res}); toast(r.dataset.res==="approve"?"You approved it.":"You declined it."); render(); }catch(e){ toast(e.message); } return; }
+  const o = ev.target.closest("[data-open]");
+  if(o){ OPEN = o.dataset.open; renderPhone(); }
+});
+$("#app").addEventListener("keydown", ev => { if((ev.key === "Enter" || ev.key === " ") && ev.target.matches("[data-open]")){ ev.preventDefault(); ev.target.click(); } });
+$("#restart").onclick = async () => { ST = await api("/api/reset", {}); SELR = null; OPEN = null; SEEN = new Set(); render(); };
+
+// ------------------------------------------------------------------ the request and the answer, formatted
+const money2 = (x, cur) => `${cur} ${Number(x).toFixed(2)}`;
+const kv = o => `<dl class="kv">${Object.entries(o).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(fmt(v))}</dd>`).join("")}</dl>`;
+const freeTag = `<span class="pill free">shop's text</span>`;
+function requestView(v){
+  const m = v.shop, t = v.totals;
+  return `<div class="reqv">
+    <div class="sec"><h4>Shop</h4>
+      <div><b>${esc(m.merchant_name)}</b> ${freeTag}</div>
+      ${kv({"merchant ID": m.merchant_id, "category": m.merchant_category, "MCC": m.merchant_mcc, "where": `${m.merchant_city}, ${m.merchant_country}`, "sells": m.availability})}</div>
+    <div class="sec"><h4>Session</h4>${kv({"time (simulated)": v.session.timestamp, "channel": v.session.channel, "device": v.session.customer_device_id,
+      "attempts, last 10 min": v.session.recent_attempt_count_10m, "initiated by": v.session.initiator_type, "card": `${v.session.card_id} (${v.session.card_status_at_attempt})`})}</div>
+    <div class="sec"><h4>Order terms</h4>${kv({"fulfilment": v.terms.fulfillment_method, "deliver by": v.terms.delivery_by, "returnable": v.terms.order_returnable,
+      "cancellable": v.terms.order_cancellable, "re-quote of": v.terms.related_authorization_id ? `${v.terms.related_authorization_id} (${v.terms.related_authorization_status})` : "none"})}</div>
+    <div class="sec wide"><h4>Basket</h4>
+      <table class="bk"><tr><th>Qty</th><th>Item</th><th>Category</th><th class="num">Unit</th><th class="num">Line</th></tr>
+      ${v.lines.map(l => `<tr><td>${l.quantity}</td><td><b>${esc(l.item_name)}</b> <span class="mono">${esc(l.item_id)}</span></td><td>${esc(l.item_category.replace("_", " "))}</td>
+        <td class="num">${money2(l.unit_price, l.currency)}</td><td class="num">${money2(l.unit_price * l.quantity, l.currency)}</td></tr>
+        <tr><td></td><td colspan="4"><div class="verb"><small>Shop's product text · untrusted</small>${esc(l.item_details)}</div></td></tr>`).join("")}</table>
+      <div class="tot"><span>subtotal ${money2(t.items_subtotal, t.currency)}</span><span>delivery ${money2(t.delivery_fee, t.currency)}</span>
+        <span>total <b>${money2(t.amount, t.currency)}</b></span>${t.currency !== "CHF" ? `<span>= <b>CHF ${Number(t.billing_amount_chf).toFixed(2)}</b></span>` : ""}</div>
+      <div class="verb"><small>Order description · shop's text · untrusted</small>${esc(v.description)}</div></div>
+    <div class="sec"><h4>Platform context</h4>${kv({"approved so far this run (CHF)": v.context.approved_spend_in_period_chf, "attempts in last 10 min": v.context.recent_authorizations})}</div>
+    <div class="sec"><h4>Envelope</h4>${kv({"type": v.envelope.type, "request": v.envelope.request_id, "authorization": v.envelope.authorization_id, "answer by": v.envelope.deadline_at})}${v.ap2 ? `<span class="pill signed">carries AP2 signatures</span>` : ""}</div>
+    <div class="sec wide"><h4>Mandate snapshot · ${esc(v.mandate.mandate_id)} · ${esc(v.mandate.status)} · if unsure: ${esc(v.mandate.uncertainty_policy)}</h4>
+      <ol class="rules">${v.mandate.rules.map(r => `<li>${esc(r)}</li>`).join("")}</ol></div>
+  </div>`;
+}
+function answerView(ans, receipt){
+  return `<div class="ans"><div class="row"><span class="verdict ${ans.decision}" style="font-size:20px">${WORD[ans.decision]}</span>${receipt ? `<span class="pill signed">AP2 receipt: ${esc(receipt.result === "success" ? "success" : receipt.error)}</span>` : ""}</div>
+    <span>${esc(ans.customer_message)}</span>
+    <div class="codes">${ans.reason_codes.map(c => `<span>${esc(c)}</span>`).join("")}</div></div>`;
+}
+
+// ------------------------------------------------------------------ the shopping agent (black box)
+function renderAgent(){
+  if(!ST || ST.step !== "shopping"){
+    $("#agent").innerHTML = `<p class="empty">Idle until the customer confirms the rules on the phone. From then on it sends one proposal at a time; the wallet answers each within seconds.</p>`;
+    return;
+  }
+  const n = ST.next, ex = ST.explain;
+  const final = f => f.decision === "step_up" ? (f.status === "pending" ? "waiting for the customer" : `customer ${f.status === "approved" ? "approved" : f.status}`) : "";
+  const cur = ex && ST.feed.find(f => f.authorization_id === ex.authorization_id);
+  $("#agent").innerHTML = `<div class="bb">
+    <div class="col">
+      <div class="bbox">
+        ${n ? `<span class="note">Proposal ${ST.feed.length + 1} of ${ST.total}</span>
+          <b>${esc(n.items.join(", "))}</b><span>${esc(n.merchant)} · ${esc(n.currency)} ${Number(n.amount).toFixed(2)}</span>
+          <label class="check"><input type="checkbox" id="ap2" ${AP2 ? "checked" : ""}><span><b>${esc(n.merchant)} signs its cart (AP2)</b><br><span class="note">The shop's choice. Viseca one signed the customer's permission either way.</span></span></label>
+          <button id="next">Send proposal to Viseca</button>`
+          : `<b>No more proposals in this story.</b>`}
+      </div>
+      ${ST.feed.length ? `<div class="sent"><span class="colh">Proposals sent · click to inspect</span>${ST.feed.slice().reverse().map(f => `
+        <button class="${f.authorization_id === ST.selected ? "sel" : ""}" data-pick="${f.authorization_id}"><span>${esc(f.source)} · ${esc(f.merchant)} · CHF ${Number(f.amount_chf).toFixed(2)}${f.ap2 ? ` <span class="pill signed">AP2</span>` : ""}</span>
+          <span class="row" style="gap:4px"><span class="pill ${f.decision}">${esc(LABEL[f.decision])}</span>${f.decision === "step_up" && f.status !== "pending" ? `<span class="pill ${f.status}">${esc(LABEL[f.status])}</span>` : ""}</span></button>`).join("")}</div>` : ""}
+    </div>
+    <div class="col">
+      ${ex ? `<div class="msg">sent → Viseca: the proposal ${esc(ex.source)}</div>
+        ${requestView(ex.view)}
+        <details><summary>Raw request, exactly as received</summary><pre class="json req" style="margin-top:6px">${esc(compact(ex.request))}</pre></details>
+        <div class="msg">← answer returned to the agent after ${ex.latency_ms} ms</div>
+        ${answerView(ex.answer, ex.receipt)}
+        ${cur && cur.decision === "step_up" ? `<div class="msg">${cur.status === "pending" ? "… the agent waits: the customer was notified on the phone" : `← later: ${esc(final(cur))} (resolution posted)`}</div>` : ""}`
+        : `<p class="empty">Send a proposal to see the exact request and the answer.</p>`}
+    </div></div>`;
+  const nb = $("#next");
+  if(nb) nb.onclick = async () => {
+    nb.disabled = true;
+    try{ ST = await api("/api/next", {ap2: AP2 = $("#ap2").checked}); SELR = null; render(); }
+    catch(e){ toast(e.message); nb.disabled = false; }
+  };
+  $("#agent").querySelectorAll("[data-pick]").forEach(b => b.onclick = async () => { try{ ST = await api("/api/select", {authorization_id:b.dataset.pick}); SELR = null; render(); }catch(e){ toast(e.message); } });
+}
+
+// ------------------------------------------------------------------ setup chain
+function umlBox(kind, stereo, title, body, extra=""){
+  return `<div class="uml ${kind} ${extra}"><div class="hd"><span class="st">«${esc(stereo)}»</span><b>${esc(title)}</b></div>${body.map(b => `<div class="cp">${b}</div>`).join("")}</div>`;
+}
+function renderSetup(){
+  if(!ST || !ST.setup){ $("#setup").innerHTML = `<p class="empty">Write an instruction on the phone. This shows which part turned it into rules: fixed parsing, the model's suggestions, the review, and you.</p>`; return; }
+  const s = ST.setup, m = s.model || {};
+  const modelOff = !m.proposed && m.last_error;
+  const boxes = [
+    umlBox("customer", "customer · phone", "Instruction", [`<span>${esc(s.instruction)}</span>`]),
+    umlBox("", "fixed code", "Rule parser", [`<span class="note">${s.parser.length} rules, each from a phrase:</span>` + s.parser.map(p => `<div class="mono">“${esc(p.phrase)}” → ${esc(p.text)}</div>`).join("")]),
+    umlBox("llm", "LLM · " + ((m.model || m.provider || "model").split("/").pop()), "Suggests extra rules",
+      [modelOff ? `<span>Not used: ${esc(m.last_error)}</span>` : `<span>${m.proposed || 0} suggestions</span><span class="note">It sees only your words, never a purchase.</span>`], modelOff ? "off" : ""),
+    umlBox("", "fixed code", "Review of suggestions", [
+      `<span>${m.suggested || 0} kept, ${(m.dropped || []).length} dropped</span>` + (m.dropped || []).map(d => `<div class="note">✕ ${esc(d.text)}: ${esc(d.why)}</div>`).join("")
+      + (s.suggested.length ? s.suggested.map(t => `<div>✓ ${esc(t)}</div>`).join("") : "")]),
+    umlBox("customer", "customer · phone", s.confirmed ? "Confirmed" : "Checks the form", [
+      s.confirmed ? (s.edits.length ? s.edits.map(e => `<div class="note">${esc(e)}</div>`).join("") : `<span class="note">No edits.</span>`) : `<span class="note">Waiting on the phone…</span>`]),
+    umlBox("", "fixed code", "Mandate", [
+      s.confirmed ? `<span class="mono">${esc(s.mandate_id)}</span><span>${s.rules} rules (incl. ${s.always_on.length} always-on)</span>${s.ap2 ? `<span class="pill signed">+ AP2 permission signed by Viseca one</span><span class="note">used whenever a shop signs its cart</span>` : ""}` : `<span class="note">not yet</span>`]),
+  ];
+  $("#setup").innerHTML = `<div class="chain">${boxes.join("")}</div>`;
+}
+
+// ------------------------------------------------------------------ one purchase
+const GROUPS = {envelope:"envelope", authorization:"authorization", merchant:"authorization.merchant", context:"context", mandate:"mandate (snapshot)", ap2:"AP2 presentation"};
+function fieldRow(r){
+  const name = r.path.replace(/^authorization\./, "").replace(/^items\[\d+\]\./, "").replace(/^merchant\./, "").replace(/^(context|mandate|ap2)\./, "");
+  return `<div class="f ${r.class}" data-key="${esc(r.key)}"><span class="k">${esc(name)}</span><span class="v">${esc(fmt(r.value))}</span></div>`;
+}
+function renderFlow(){
+  const ex = ST && ST.explain;
+  if(!ex){ $("#flow").innerHTML = `<p class="empty">Once the agent sends a proposal (area 2), every field Viseca received appears here, tagged by where it comes from, with every check wired to the data it read.</p>`; $("#flow-note").textContent=""; return; }
+  $("#flow-title").textContent = `${ex.source} · ${ex.merchant} · CHF ${Number(ex.amount_chf).toFixed(2)} · what arrived and how it was decided`;
+  if(SELR === null || SELR >= ex.rules.length){ const i = ex.rules.findIndex(r => r.status === "fail"); SELR = i >= 0 ? i : Math.max(ex.rules.findIndex(r => r.status === "unknown"), 0); }
+  // column 1: the envelope exactly as received
+  const byGroup = {};
+  ex.received.forEach(r => { const g = r.group === "items" ? `items[${r.line - 1}]` : r.group; (byGroup[g] = byGroup[g] || []).push(r); });
+  const recv = Object.entries(byGroup).map(([g, rows]) => `<div class="grp">${esc(GROUPS[g] || "authorization." + g)}</div>${rows.map(fieldRow).join("")}`).join("");
+  const nFree = ex.received.filter(r => r.class === "free_text").length;
+  const col1 = `<div class="col"><div class="colh">1 · Received from the platform, exactly</div>
+    ${umlBox("", "platform → Viseca", "event : authorization.request", [recv, `<span class="note">${ex.received.length} fields; ${nFree} are the shop's free text.</span>`])}</div>`;
+  // column 2: processing
+  const wallRows = ex.wall.map(w => {
+    const src = k => w.sources[k] ? ` <span class="note">(${esc(w.sources[k])})</span>` : "";
+    const facts = [["size","size"],["return_days","return_days"],["final_sale","final_sale"],["recurring_billing","recurring_billing"],["quasi_cash","quasi_cash"],["addon","addon"]]
+      .map(([k, key]) => `<div class="f ${String(w.sources[k] || "").includes("model") ? "llmfact" : ""}" data-key="wall.${key}"><span class="k">line ${w.line_no}.${k}</span><span class="v">${esc(fmt(w.facts[k]))}${src(k)}</span></div>`).join("");
+    return `${facts}${w.flagged ? `<div class="note" style="color:var(--no)">line ${w.line_no}: text talks to the payment system; its facts are withheld</div>` : ""}`;
+  }).join("");
+  const inj = ex.rules.find(r => r.field === "security.merchant_text_clean");
+  const lk = ex.rules.find(r => r.field === "derived.not_lookalike");
+  const node = (key, value) => `<div class="f viseca node" data-key="${key}"><span class="k">${esc(ex.nodes[key].label)}</span><span class="v">${esc(value || "")}</span></div>`;
+  const col2 = `<div class="col"><div class="colh">2 · Viseca-side processing</div>
+    ${umlBox("", "fixed code · regex", "vendor-supplied text → typed facts", [`<span class="note">The only code that reads the shop's own text. It outputs numbers, yes/no or unknown; nothing it reads can change a rule. Text that tries to instruct the payment system makes that line's facts unknown.</span>`, wallRows])}
+    ${umlBox("llm", "LLM · optional", "extraction fallback", [ex.model_facts ? `<span>Filled a fact the regexes missed; kept only because the value appears verbatim in the text.</span>` : `<span>Not used for this purchase.</span><span class="note">Only with LEASH_LLM_EXTRACT=1, only for size / return window, only if verbatim in the text.</span>`], ex.model_facts ? "" : "off")}
+    ${umlBox("", "fixed code · patterns", "detectors", [
+      `<div class="f node" data-key="detector.injection"><span class="k">instructions to the payment system</span><span class="v">${inj ? (inj.status === "pass" ? "none" : "FOUND") : "n/a"}</span></div>
+       <div class="f node" data-key="detector.lookalike"><span class="k">imitates a known shop</span><span class="v">${lk ? (lk.status === "pass" ? "no" : "YES") : "n/a"}</span></div>
+       <span class="note">They can only make a decision stricter.</span>`])}
+    ${umlBox("viseca", "Viseca's records", "history and reference data", [node("viseca.card_history", "12 months"), node("viseca.run_ledger", "this run"), node("viseca.catalogue_prices", "min–max CHF")])}
+    ${umlBox("customer", "customer", "your controls", [node("customer.controls", "")])}
+  </div>`;
+  // column 3: checks
+  const originPill = o => o.kind === "llm" ? `<span class="st llm">«AI suggestion · confirmed by you»</span>` : o.kind === "words" ? `<span class="st">«your words: “${esc(o.phrase)}”»${o.edited ? " · edited" : ""}</span>` : `<span class="st">«${esc(o.label)}»</span>`;
+  const col3 = `<div class="col checks-col"><div class="colh">3 · Checks · all fixed code, no model decides</div>
+    ${ex.rules.map((r, i) => `<div class="chk ${r.status} ${i === SELR ? "sel" : ""} ${r.ap2_effect ? "ap2fx" : ""}" data-r="${i}">
+      <div class="hd"><span>${originPill(r.origin)}</span><span class="pill ${r.status}">${r.status}</span></div>
+      <div class="bd"><div class="rir">
+        <span class="lbl">Rule</span><div>${esc(r.rule_text || r.how)}<br><code>${esc(r.rule ? `${r.rule.field} ${r.rule.operator} ${fmt(r.rule.value)}${r.rule.period_days ? ` over ${r.rule.period_days} days` : ""}` : r.field)}</code></div>
+        <span class="lbl">Input</span><div class="ins">${r.inputs.map(i => `<span class="in ${i.class}">${i.value === "consulted" ? `<span>${esc(i.label)}</span>` : `<span class="l">${esc(i.label)}</span>${esc(fmt(i.value))}`}${i.from ? `<span class="from">from ${esc(i.from)}</span>` : ""}</span>`).join("") || `<span class="note">none</span>`}</div>
+        <span class="lbl">How</span><div><ol class="trace">${(r.trace || []).map(t => `<li>${esc(t)}</li>`).join("") || `<li>${esc(r.how)}</li>`}</ol><span class="note">${esc(r.how)}</span></div>
+        <span class="lbl">Result</span><div><b class="st-${r.status}">${{pass:"pass", fail:"fail", unknown:"uncertain"}[r.status]}</b> · ${esc(r.text)}</div></div>
+        <span class="row" style="gap:4px">${r.ap2_effect ? `<span class="pill signed">AP2: ${esc(r.ap2_effect)}</span>` : ""}<span class="pill fixed">fixed code</span>${r.text_input ? `<span class="pill free" title="Uses facts the shop states in its own text (return window, size, add-on wording). Read by fixed patterns into numbers or yes/no; text can't change a rule, and manipulative text makes the fact unknown. Still the shop's claim: it can be false.">relies on vendor-supplied data</span>` : r.tier === "ap2" ? "" : `<span class="pill tx" title="Decided only from data inherent in the transaction (amount, currency, merchant ID, categories, device, card history), which the shop's text can't fake.">transaction data only</span>`}${r.model_fact ? `<span class="pill llm">uses a model-extracted fact</span>` : ""}${r.provenance === "shop-signed" || r.signed ? `<span class="pill signed">signed</span>` : ""}${r.security ? `<span class="pill unknown">can only escalate</span>` : ""}</span>
+</div></div>`).join("")}</div>`;
+  const c = ex.combine;
+  const pol = {ask:"ask you", decline:"decline", approve:"approve (manipulation still asks)"}[c.policy] || c.policy;
+  const comb = `<div class="comb">
+    ${umlBox("", "fixed code", "combine", [`<div class="branch">
+        <div class="${c.branch==="fail"?"on":""}">${c.counts.fail} failed → decline</div>
+        <div class="${c.branch==="unknown"?"on":""}">${c.counts.unknown} uncertain → your choice: ${esc(pol)}${c.security.length ? " (security signals never approved away)" : ""}</div>
+        <div class="${c.branch==="pass"?"on":""}">all ${c.counts.pass} passed → approve</div></div>`,
+      `<span class="verdict ${c.decision}">${WORD[c.decision]}</span><span class="mono">${esc(c.reason_codes.join(", "))} · ${ex.latency_ms} ms</span>`])}
+    ${umlBox("", "fixed code", "outgoing messages", [
+      `<div class="msg">to the agent (area 2): ${esc(c.decision)}${ex.receipt ? " + signed AP2 receipt" : ""}</div>`,
+      `<div class="msg">to the phone (area 1): ${c.decision === "step_up" ? "push notification, the customer decides" : "nothing; the customer isn't interrupted"}</div>`,
+      answerView(ex.answer, ex.receipt),
+      `<span class="note">The message is built from the checks above, not written by a model.</span>`])}
+  </div>`;
+  const d = ex.ap2_diff, w = d && d.decision;
+  const fx = d ? `<div class="fx"><h3>AP2 · what the shop's signature changed for this proposal</h3>
+      <div class="vs"><span>Decision without AP2</span><span class="pill ${w.without}">${esc(LABEL[w.without])}</span><span>→ with AP2</span><span class="pill ${w.with}">${esc(LABEL[w.with])}</span>
+        <span class="note">${w.without === w.with ? "Same answer; what changed is what it rests on." : "AP2 changed the answer."}</span></div>
+      <div class="fxg">
+        <div><h4>Added: ${d.added.length} checks</h4>${d.added.map(a => `<span><b class="st-${a.status}">${a.status}</b> · ${esc(a.text)}</span>`).join("")}</div>
+        <div><h4>Changed: ${d.changed.length} checks</h4>${d.changed.map(c => `<span><b>${esc(c.effect)}</b> · ${esc(c.text)}</span>`).join("") || `<span class="note">none</span>`}</div>
+        <div><h4>No longer needed</h4>${d.removed.map(r => `<span>${esc(r.text)}</span>`).join("") || `<span class="note">none</span>`}
+          ${d.evidence.map(e => `<h4 style="margin-top:6px">Evidence</h4><span>${esc(e)}</span>`).join("")}</div>
+      </div>
+      <span class="note">Proven by signatures rather than trusted: who the shop is (its key), that basket, prices and total are what the shop offered, that the customer's agent signed it, that this cart is paid once. The shop's product text is still untrusted: a signature says who wrote it, not that it is safe.</span></div>`
+    : `<div class="fx off"><h3>No AP2 on this proposal</h3>
+      <span class="note">The shop didn't sign its cart. Shop identity is the merchant ID the acquirer reports; basket, prices and order terms are as reported, unsigned. A changed basket or a replayed order can only be caught by heuristics (the repeat and split-order checks), and the shop can later deny what its text said. The same rules still apply.</span></div>`;
+  $("#flow").innerHTML = fx + `<div class="flow" id="diagram"><svg id="wires"><defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--muted)"/></marker></defs></svg>${col1}${col2}${col3}</div>
+    <div class="nomodel">Models at decision time: none. The only model in this system suggests rules at setup (you confirm them) and, optionally, reads a size or return window that must appear verbatim in the shop's text.</div>
+    ${comb}`;
+  $("#diagram").querySelectorAll(".chk").forEach(el => el.onclick = () => { SELR = +el.dataset.r; renderFlow(); });
+  requestAnimationFrame(wires);
+}
+function wires(){
+  const ex = ST && ST.explain, svg = $("#wires"), dia = $("#diagram");
+  if(!ex || !svg) return;
+  svg.querySelectorAll("path.w").forEach(p => p.remove());
+  dia.querySelectorAll(".f.hot").forEach(el => el.classList.remove("hot"));
+  const target = dia.querySelector(`.chk[data-r="${SELR}"]`); if(!target) return;
+  const box = dia.getBoundingClientRect();
+  const side = (el, right) => { const r = el.getBoundingClientRect(); return {x:(right ? r.right : r.left) - box.left, y:r.top + Math.min(r.height / 2, 12) - box.top, r}; };
+  const tRect = target.getBoundingClientRect();
+  const drawable = tRect.left > box.left + 200;   // columns side by side
+  let out = "";
+  const curve = (a, b, cls) => { const dx = Math.max(30, Math.abs(b.x - a.x) / 2); out += `<path class="w ${cls}" marker-end="url(#ah)" d="M${a.x},${a.y} C${a.x + dx},${a.y} ${b.x - dx},${b.y} ${b.x},${b.y}"/>`; };
+  const t = side(target, false);
+  const rule = ex.rules[SELR];
+  const hop = new Set();
+  rule.reads.forEach(key => {
+    dia.querySelectorAll(`.f[data-key="${CSS.escape(key)}"]`).forEach(el => {
+      el.classList.add("hot");
+      if(drawable){ const s = side(el, true); const cls = key.startsWith("viseca.") ? "w-viseca" : key.startsWith("customer.") || key.startsWith("mandate.") ? "w-customer" : key.startsWith("ap2.") ? "w-signed" : el.classList.contains("free_text") ? "w-free_text" : "w-structured"; curve(s, t, cls); }
+    });
+    if(key.startsWith("wall.")) ex.wall_reads.forEach(k => hop.add(`${k}→${key}`));
+    if(ex.nodes[key] && ex.nodes[key].reads) ex.nodes[key].reads.forEach(k => hop.add(`${k}→${key}`));
+  });
+  hop.forEach(h => {
+    const [from, to] = h.split("→");
+    const dst = [...dia.querySelectorAll(`.f[data-key="${CSS.escape(to)}"]`)];
+    dia.querySelectorAll(`.f[data-key="${CSS.escape(from)}"]`).forEach(src => {
+      src.classList.add("hot");
+      if(!drawable) return;
+      const s = side(src, true);
+      const d = dst.length ? dst.reduce((best, el) => Math.abs(el.getBoundingClientRect().top - src.getBoundingClientRect().top) < Math.abs(best.getBoundingClientRect().top - src.getBoundingClientRect().top) ? el : best, dst[0]) : null;
+      if(d && d.getBoundingClientRect().left > src.getBoundingClientRect().right) curve(s, side(d, false), src.classList.contains("free_text") ? "w-hop" : "w-structured");
+    });
+  });
+  svg.insertAdjacentHTML("beforeend", out);
+}
+window.addEventListener("resize", () => requestAnimationFrame(wires));
+
+function render(){ renderPhone(); renderAgent(); renderSetup(); renderFlow(); }
+(async () => { PEOPLE = (await api("/api/customers")).customers; SEL = PEOPLE.find(p => p.scenario_id === "SCEN0004") || PEOPLE[0]; ST = await api("/api/state"); render(); })();
+</script>
+</body>
+</html>

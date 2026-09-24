@@ -41,6 +41,7 @@ class AttemptRecord:
     security_flags: list[str] = field(default_factory=list)
     resolved_by: str | None = None
     resolved_at: str | None = None
+    checkout_hash: str | None = None   # AP2: the shop-signed cart this attempt paid for
 
 
 @dataclass
@@ -156,6 +157,7 @@ class Store:
         self.lock = threading.RLock()
         self.runs: dict[str, RunLedger] = {}
         self.controls: dict[str, CustomerControls] = {}
+        self.checkout_hashes: dict[str, str] = {}   # AP2: shop-signed cart → the attempt that used it
 
     def run(self, run_id: str, *, customer_id: str, card_id: str, mandate_id: str) -> RunLedger:
         with self.lock:

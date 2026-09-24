@@ -1,4 +1,4 @@
-"""Command line: `leash demo | demo-web | eval | replay | compile | ui | live`."""
+"""Command line: `leash demo | demo-web | flow-web | eval | replay | compile | ui | live`."""
 from __future__ import annotations
 
 import argparse
@@ -69,10 +69,22 @@ def cmd_ui(a):
     uvicorn.run("leash.ui.app:app", host=a.host, port=a.port, log_level="warning")
 
 
+def cmd_api(a):
+    import uvicorn
+    print(f"Decision API on http://{a.host}:{a.port} (docs at /docs)")
+    uvicorn.run("leash.api.app:app", host=a.host, port=a.port, log_level="warning")
+
+
 def cmd_demo_web(a):
     import uvicorn
     print(f"Interactive demo on http://{a.host}:{a.port}")
     uvicorn.run("leash.demo_web.app:app", host=a.host, port=a.port, log_level="warning")
+
+
+def cmd_flow_web(a):
+    import uvicorn
+    print(f"Flow demo on http://{a.host}:{a.port}")
+    uvicorn.run("leash.flow_web.app:app", host=a.host, port=a.port, log_level="warning")
 
 
 def cmd_live(a):
@@ -135,10 +147,18 @@ def main(argv=None):
     u.add_argument("--port", type=int, default=8000)
     u.add_argument("--pace", type=float, default=1.2, help="seconds between simulated purchases")
     u.set_defaults(fn=cmd_ui)
+    ap = sub.add_parser("api", help="decision API for a separate frontend (rules in, approve/decline/step_up out)")
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8003)
+    ap.set_defaults(fn=cmd_api)
     dw = sub.add_parser("demo-web", help="interactive demo: pick a customer, edit and send each purchase")
     dw.add_argument("--host", default="127.0.0.1")
     dw.add_argument("--port", type=int, default=8001)
     dw.set_defaults(fn=cmd_demo_web)
+    fw = sub.add_parser("flow-web", help="phone + diagram: what the wallet receives and how each rule is decided")
+    fw.add_argument("--host", default="127.0.0.1")
+    fw.add_argument("--port", type=int, default=8002)
+    fw.set_defaults(fn=cmd_flow_web)
     lv = sub.add_parser("live", help="event day: run against the hosted API")
     lv.add_argument("--scenario", default="SCEN0000")
     lv.set_defaults(fn=cmd_live)

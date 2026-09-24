@@ -121,6 +121,7 @@ class SimPlatform:
         self.runs: dict[str, dict] = {}
         self.auths: dict[str, dict] = {}
         self.feed: list[dict] = []
+        self.ap2 = None   # ap2.Ap2Sim: shops sign carts and the agent carries AP2 mandates (see Session.enable_ap2)
 
     def bootstrap(self) -> dict:
         return {"mode": "simulator", "decision_deadline_seconds": self.DECISION_DEADLINE_S,
@@ -279,6 +280,8 @@ class SimPlatform:
                                "status": "queued", "billing_amount_chf": row["billing_amount_chf"], "event": event,
                                "deadline": time.monotonic() + self.DECISION_DEADLINE_S, "decision": None,
                                "resolution": None, "delivered": 0}
+            if self.ap2:
+                self.auths[lid]["ap2"] = self.ap2.present(row, run["mandate_id"])
             run["released"] += 1
             run["last_release"] = now
             return self.auths[lid]
@@ -311,9 +314,12 @@ class SimPlatform:
 
     def _envelope(self, a: dict) -> dict:
         a["delivered"] += 1
-        return {"run_id": a["run_id"], "event_id": "evt_" + uuid.uuid4().hex[:10], "type": "authorization.request",
-                "authorization_id": a["authorization_id"], "status": "queued", "occurred_at": iso(utcnow()),
-                "data": a["event"]}
+        env = {"run_id": a["run_id"], "event_id": "evt_" + uuid.uuid4().hex[:10], "type": "authorization.request",
+               "authorization_id": a["authorization_id"], "status": "queued", "occurred_at": iso(utcnow()),
+               "data": a["event"]}
+        if a.get("ap2"):
+            env["ap2"] = a["ap2"]   # beside `data`: the event itself stays schema-exact
+        return env
 
     def redeliver(self, authorization_id: str) -> dict:
         """Test hook: deliver the same event again."""
@@ -362,5 +368,5 @@ class SimPlatform:
     def authorizations(self, run_id: str | None = None) -> list[dict]:
         with self.lock:
             self._expire()
-            return [{k: v for k, v in a.items() if k != "event"} for a in self.auths.values()
+            return [{k: v for k, v in a.items() if k not in ("event", "ap2")} for a in self.auths.values()
                     if run_id is None or a["run_id"] == run_id]

@@ -64,14 +64,18 @@ class Engine:
             return [Check("controls.merchant_flag", FAIL,
                           f"You blocked {merchant['merchant_name']}: {flag['reason']}",
                           "merchant_blocked_by_customer", tier="your-controls", provenance="customer", security=True,
-                          extra={"flag": flag})]
+                          extra={"flag": flag},
+                          trace=[f"merchant ID {merchant['merchant_id']} is on your list: mode = block", "blocked → fail"])]
         return [Check("controls.merchant_flag", UNK,
                       f"Asking you every time for {merchant['merchant_name']}, because {flag['reason']}",
                       "merchant_flagged_manipulation", tier="your-controls", provenance="customer", security=True,
-                      extra={"flag": flag})]
+                      extra={"flag": flag},
+                      trace=[f"merchant ID {merchant['merchant_id']} is on your list: mode = ask every time "
+                             f"({len(flag.get('incidents', []))} incident(s))", "ask every time → uncertain"])]
 
     # ----------------------------------------------------------- decide
-    def decide(self, event: dict, run_id: str | None = None) -> dict:
+    def decide(self, event: dict, run_id: str | None = None, ap2=None) -> dict:
+        """`ap2`: an ap2.Ap2Result when the purchase came with AP2 mandates and a shop-signed cart."""
         t0 = time.perf_counter()
         a, mandate = event["authorization"], event["mandate"]
         run_id = run_id or f"run-{mandate['mandate_id']}"
@@ -97,13 +101,19 @@ class Engine:
             ctx = Ctx(event=event, pack=self.pack, profile=profile, ledger=ledger, controls=controls, ts=ts,
                       facts=facts, rules=rules,
                       lookalike=find_lookalike(a["merchant"]["merchant_id"], a["merchant"]["merchant_name"], familiar),
-                      injection_hits=self._injection_hits(a, facts))
+                      injection_hits=self._injection_hits(a, facts), ap2=ap2)
 
-            platform = self._platform_checks(event, controls)
-            checks = platform + [evaluate(ctx, r) for r in rules] + self._control_checks(controls, a["merchant"])
+            ap2_checks = self._ap2_checks(ap2, a) if ap2 else []
+            # signature and binding checks lead; the signed limits repeat the rules, so they follow them
+            ap2_after = [c for c in ap2_checks if c.field == "ap2.constraints"]
+            platform = self._platform_checks(event, controls) + [c for c in ap2_checks if c not in ap2_after]
+            checks = (platform + [_with_rule(evaluate(ctx, r), r) for r in rules] + ap2_after
+                      + self._control_checks(controls, a["merchant"]))
             for c in checks:
                 if c.tier == "customer" and c.field in {r["field"] for r in controls.extra_rules.get(mandate["mandate_id"], [])}:
                     c.tier = "added-by-you"
+            if ap2:
+                checks = self._merge_ap2(checks, ap2)
             policy = controls.uncertainty_override.get(mandate["mandate_id"], mandate["uncertainty_policy"])
             decision, reasons = self.combine(checks, policy)
 
@@ -112,6 +122,8 @@ class Engine:
                 security_flags.append("prompt injection")
             if ctx.lookalike:
                 security_flags.append(f"lookalike of {ctx.lookalike['imitates_name']}")
+            security_flags += [f"AP2: {c.code.removeprefix('ap2_').replace('_', ' ')}" for c in checks
+                               if c.tier == "ap2" and c.status == FAIL]
 
             result = {
                 "authorization_id": a["authorization_id"],
@@ -134,9 +146,14 @@ class Engine:
                 "mandate_id": mandate["mandate_id"],
                 "rules": rules,
             }
+            if ap2:
+                result["ap2"] = ap2.summary()
             rec = record_from_event(event, decision, result)
             rec.security_flags = security_flags
             ledger.add(rec)
+            if ap2 and ap2.checkout_hash and ap2.merchant_verified:
+                rec.checkout_hash = ap2.checkout_hash
+                self.store.checkout_hashes.setdefault(ap2.checkout_hash, a["authorization_id"])
             result["flags_created"] = self._flag_and_alert(controls, ctx, result, run_id)
             result["latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
             return result
@@ -147,11 +164,46 @@ class Engine:
         if m["status"] != "active" or m["mandate_id"] in controls.revoked_mandates:
             status = "revoked" if m["mandate_id"] in controls.revoked_mandates else m["status"]
             out.append(Check("mandate.status", FAIL, f"Your permission for the agent is {status}.", "mandate_not_active",
-                             tier="platform", actual=status, expected="active"))
+                             tier="platform", actual=status, expected="active",
+                             trace=[f"mandate status = {status!r}", f"{status!r} = 'active' → false"]))
         if a["authority_status"] != "active" or a["card_status_at_attempt"] != "active":
             out.append(Check("authorization.card_status_at_attempt", FAIL,
                              f"The card or authority is not active ({a['card_status_at_attempt']}/{a['authority_status']}).",
-                             "card_not_active", tier="platform"))
+                             "card_not_active", tier="platform",
+                             trace=[f"card status = {a['card_status_at_attempt']!r}, authority = {a['authority_status']!r}",
+                                    "both must be 'active' → false"]))
+        return out
+
+    def _ap2_checks(self, ap2, a: dict) -> list[Check]:
+        """AP2 verification (ap2.verify) plus replay, checked here under the store lock:
+        a shop-signed cart pays once, whichever run presents it."""
+        out = list(ap2.checks)
+        if ap2.checkout_hash and ap2.merchant_verified:
+            prev = self.store.checkout_hashes.get(ap2.checkout_hash)
+            if prev and prev != a["authorization_id"]:
+                out.append(Check("ap2.replay", FAIL, f"This exact shop-signed cart was already presented for an earlier "
+                                 f"payment ({prev}); a signed cart pays once.", "ap2_replay", tier="ap2",
+                                 provenance="cryptographic", security=True, extra={"previous": prev},
+                                 trace=[f"checkout_hash {ap2.checkout_hash[:10]}… already used by {prev} → replay"]))
+            else:
+                out.append(Check("ap2.replay", PASS, "First use of this shop-signed cart.", "ap2_replay", tier="ap2",
+                                 provenance="cryptographic",
+                                 trace=[f"checkout_hash {ap2.checkout_hash[:10]}… not among {len(self.store.checkout_hashes)} carts paid before → first use"]))
+        return out
+
+    @staticmethod
+    def _merge_ap2(checks: list[Check], ap2) -> list[Check]:
+        """One check per fact: a rule the signed permission repeats is marked as signed rather than
+        checked twice, and a replayed signed cart makes the 'looks like a repeat' signal redundant."""
+        replay = any(c.field == "ap2.replay" and c.status == FAIL for c in checks)
+        out = []
+        for c in checks:
+            if replay and c.field == "derived.not_duplicate":
+                continue
+            if c.field in ap2.covered and c.tier in ("customer", "added-by-you"):
+                c.text = c.text.rstrip(".") + " (also in the permission you signed on Viseca one)."
+                c.extra = {**c.extra, "signed_permission": True}
+            out.append(c)
         return out
 
     @staticmethod
@@ -183,11 +235,16 @@ class Engine:
         outcome = {"approve": "approved", "decline": "declined", "step_up": "sent to you"}[result["decision"]]
         incident = {"authorization_id": result["authorization_id"], "source_authorization_id": result["source_authorization_id"],
                     "run_id": run_id, "amount_chf": result["amount_chf"], "date": date, "decision": result["decision"]}
+        signed = bool(ctx.ap2 and ctx.ap2.merchant_verified)
+        proof = (f" The text was in a cart {m['merchant_name']} signed with its own key: proof, not suspicion."
+                 if signed else "")
+        if signed:
+            incident.update(signed_by_shop=True, checkout_hash=ctx.ap2.checkout_hash)
         if ctx.injection_hits:
             hit = ctx.injection_hits[0]
             rules = sorted({h["rule"] for h in hit["hits"]})
             reason = (f"on {date} its text tried to instruct the payment system ({', '.join(rules[:3])}) "
-                      f"on a {chf(result['amount_chf'])} order, which we {outcome}.")
+                      f"on a {chf(result['amount_chf'])} order, which we {outcome}.{proof}")
             known = m["merchant_id"] in controls.merchant_flags
             flag = controls.flag_merchant(m["merchant_id"], m["merchant_name"], kind="injection", reason=reason,
                                           incident={**incident, "verbatim": hit["text"], "where": hit["where"]})
@@ -195,7 +252,7 @@ class Engine:
             controls.add_alert(type="manipulation", merchant_id=m["merchant_id"], merchant_name=m["merchant_name"],
                                title=f"{m['merchant_name']} tried to manipulate your shopping agent",
                                message=(f"On {date} a {chf(result['amount_chf'])} order from {m['merchant_name']} contained text aimed at "
-                                        f"the payment system. We {outcome} it. From now on we'll ask you before every purchase "
+                                        f"the payment system. We {outcome} it.{proof} From now on we'll ask you before every purchase "
                                         f"from this shop. You can keep that, block the shop, or remove the rule."),
                                verbatim=hit["text"], where=hit["where"], decision=result["decision"],
                                authorization_id=result["authorization_id"], run_id=run_id)
@@ -286,6 +343,11 @@ class Engine:
                     raise ValueError("uncertainty handling can only be tightened to 'decline'")
                 controls.uncertainty_override[mandate_id] = "decline"
                 controls.log("uncertainty_tightened", by, mandate_id=mandate_id)
+
+
+def _with_rule(check: Check, rule: dict) -> Check:
+    check.rule = rule
+    return check
 
 
 def _codes(checks: list[Check]) -> list[str]:

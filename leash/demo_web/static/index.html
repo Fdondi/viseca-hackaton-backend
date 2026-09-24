@@ -87,6 +87,11 @@ details summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:13p
 .q{border-left:3px solid var(--ask);padding:6px 10px;background:var(--ask-soft);border-radius:0 6px 6px 0;font-size:13px}
 .toast{position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:8px;font-size:13.5px;max-width:90vw;z-index:10}
 .empty{color:var(--muted);font-size:13.5px}
+.pill.sig{color:var(--accent);background:var(--accent-soft)}
+.ap2box{border-left:3px solid var(--accent);background:var(--accent-soft);padding:8px 12px;border-radius:0 6px 6px 0;font-size:13px;display:flex;flex-direction:column;gap:6px}
+label.check{flex-direction:row;align-items:flex-start;gap:8px;font-size:13.5px;font-weight:400;color:var(--ink)}
+label.check input{width:auto;margin-top:3px}
+pre.json{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0 0;max-height:320px;overflow:auto}
 </style>
 </head>
 <body>
@@ -104,6 +109,7 @@ details summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:13p
     <div class="panel" id="setup" hidden>
       <div class="eyebrow">Their instruction to the agent</div>
       <textarea id="instruction" style="font:14px/1.5 var(--body);min-height:70px"></textarea>
+      <label class="check"><input type="checkbox" id="ap2"><span><b>Shops sign their carts (AP2, autonomous flow).</b> Viseca one signs the agent's permission when the customer confirms; each shop signs its cart; Viseca verifies both signatures before it pays, then applies the rules.</span></label>
       <div class="row"><button class="big" id="go">Put the agent on a leash</button><span class="note">Rules are compiled, shown, and confirmed on the customer's behalf.</span></div>
     </div>
   </section>
@@ -114,6 +120,10 @@ details summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:13p
       <div class="panel">
         <div class="eyebrow">The leash</div>
         <div id="rules"></div>
+      </div>
+      <div class="panel" id="ap2-panel" hidden>
+        <div class="eyebrow">AP2 · the permission Viseca one signed</div>
+        <div id="ap2-side"></div>
       </div>
       <div class="panel">
         <div class="eyebrow">Shops the wallet asks about</div>
@@ -193,7 +203,7 @@ $("#people").addEventListener("click", ev => {
   $("#setup").scrollIntoView({behavior:"smooth", block:"nearest"});
 });
 $("#go").onclick = async () => {
-  try{ ST = await api("/api/start", {scenario_id:SEL.scenario_id, instruction:$("#instruction").value}); }
+  try{ ST = await api("/api/start", {scenario_id:SEL.scenario_id, instruction:$("#instruction").value, ap2:$("#ap2").checked}); }
   catch(e){ return toast(e.message); }
   $("#pick").hidden = true; $("#bench").hidden = false; $("#change").hidden = false; confirmRevoke = false;
   loadNext(); renderAll();
@@ -201,6 +211,11 @@ $("#go").onclick = async () => {
 $("#change").onclick = () => { $("#pick").hidden = false; $("#bench").hidden = true; $("#change").hidden = true; $("#who").textContent = ""; };
 
 // ---------------------------------------------------------------- the leash + controls
+function modelSummary(m){
+  if(!m.proposed) return "no suggestions";
+  if(m.suggested) return `${m.proposed} suggestions, ${m.suggested} added for review`;
+  return `${m.proposed} suggestions, nothing new to add`;
+}
 function renderSide(){
   const d = ST.draft;
   const mine = d.notes.filter(n => n.tier === "your rules" || n.tier.startsWith("suggested"));
@@ -209,7 +224,7 @@ function renderSide(){
   $("#rules").innerHTML = `
     <p class="note">${esc(ST.customer.persona)} · mandate <span class="mono">${esc(ST.mandate.mandate_id)}</span></p>
     <ul class="plain">${mine.map(n => `<li>${esc(n.text)}${n.tier.startsWith("suggested") ? ` <span class="pill edit">AI suggestion</span>` : ""}</li>`).join("")}</ul>
-    ${ST.model ? `<details><summary>${esc((ST.model.model || "").split("/").pop())}: ${ST.model.last_error && !ST.model.proposed ? "unavailable" : `proposed ${ST.model.proposed}, kept ${ST.model.suggested}`}</summary>
+    ${ST.model ? `<details><summary>${esc((ST.model.model || "").split("/").pop())}: ${ST.model.last_error && !ST.model.proposed ? "unavailable" : modelSummary(ST.model)}</summary>
       ${ST.model.last_error && !ST.model.proposed ? `<p class="note">${esc(ST.model.last_error)}</p>` : ""}
       <ul class="plain" style="margin-top:6px">${(ST.model.dropped || []).map(d => `<li>${esc(d.text)}<br><span class="note">dropped: ${esc(d.why)}</span></li>`).join("") || "<li class='note'>Nothing dropped.</li>"}</ul></details>` : `<p class="note">No language model configured: rules come from the deterministic compiler only.</p>`}
     <p style="margin:0"><b>${esc(pol)}</b></p>
@@ -228,6 +243,16 @@ function renderSide(){
     : confirmRevoke ? `<div class="you" style="border-color:var(--no);background:var(--no-soft)"><b>Withdraw the agent's permission?</b><span class="note">No further purchases reach the wallet, and anything waiting can only be declined.</span><div class="row"><button class="no" data-rev="yes">Withdraw</button><button class="ghost" data-rev="no">Keep</button></div></div>`
     : `<button class="warn" data-rev="ask">Withdraw permission</button>`;
   $("#who").textContent = `${ST.customer.persona} · ${ST.customer.story}`;
+  $("#ap2-panel").hidden = !ST.ap2;
+  if(ST.ap2){
+    const v = ST.ap2.visibility;
+    $("#ap2-side").innerHTML = `
+      <p class="note">Signed by ${esc(v.signed_by)}. Bound to the agent key <span class="mono">${esc(v.agent_key)}</span>, valid until ${esc(v.valid_until)}.</p>
+      <div><b>The shop sees</b><ul class="plain" style="margin-top:4px">${v.shop_sees.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>
+      <div><b>Viseca checks</b><ul class="plain" style="margin-top:4px">${v.viseca_sees.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>
+      <p class="note">${esc(v.stays_private)}</p>
+      <details><summary>Open mandates (decoded)</summary><pre class="mono json">${esc(JSON.stringify(ST.ap2.decoded, null, 1))}</pre></details>`;
+  }
 }
 
 // ---------------------------------------------------------------- step 2: editor
@@ -244,7 +269,9 @@ function editCount(){
   ["timestamp","currency","delivery_fee","customer_device_id","recent_attempt_count_10m","fulfillment_method","order_returnable","order_cancellable","purchase_description","related_authorization_id"].forEach(k=>{ if(changed(FORM[k],ORIG[k])) n++; });
   ["merchant_id","merchant_name","merchant_mcc","merchant_country"].forEach(k=>{ if(changed(FORM.merchant[k],ORIG.merchant[k])) n++; });
   if(FORM.lines.length !== ORIG.lines.length) n++;
-  FORM.lines.forEach((l,i)=>{ const o = ORIG.lines[i]; if(!o) return; ["item_id","quantity","unit_price","item_details"].forEach(k=>{ if(changed(l[k],o[k])) n++; }); });
+  FORM.lines.forEach((l,i)=>{ const o = ORIG.lines[i]; if(!o) return; ["item_id","quantity","unit_price","item_details"].forEach(k=>{ if(changed(l[k],o[k])) n++; });
+    if(l.signed && o.signed) ["size","return_window_days"].forEach(k=>{ if(changed(l.signed[k],o.signed[k])) n++; }); });
+  if(FORM.ap2 && ORIG.ap2) ["attack","returnable"].forEach(k=>{ if(changed(FORM.ap2[k],ORIG.ap2[k])) n++; });
   return n;
 }
 function opt(v, label, cur){ return `<option value="${esc(v)}" ${String(v)===String(cur)?"selected":""}>${esc(label)}</option>`; }
@@ -275,6 +302,14 @@ function renderEditor(){
       <button class="chip" data-preset="eur">bill in EUR</button>
       ${ST.previous ? `<button class="chip" data-preset="repeat">repeat previous order</button>` : ""}
     </div>
+    ${f.ap2 ? `<div class="row" style="gap:6px"><span class="eyebrow">AP2</span>
+      <button class="chip" data-preset="tamper">agent lowers the price after the shop signed</button>
+      ${ST.previous ? `<button class="chip" data-preset="replay">replay the previous signed cart</button>` : ""}
+      <button class="chip" data-preset="shopkey">cart signed with another shop's key</button>
+      <button class="chip" data-preset="agentkey">unauthorised agent key</button>
+      <button class="chip" data-preset="withhold">agent withholds the signed cart</button>
+      <button class="chip" data-preset="signret">shop signs a 30-day return window</button>
+    </div>` : ""}
     <fieldset><legend>Shop</legend>
       <label class="${cls("merchant.merchant_id")}">Merchant (identity = merchant ID)
         <select data-k="merchant_pick">${known ? "" : opt(f.merchant.merchant_id, `${f.merchant.merchant_name} (new ID ${f.merchant.merchant_id})`, f.merchant.merchant_id)}${merchants}</select></label>
@@ -319,6 +354,15 @@ function renderEditor(){
       </div>
       <label class="${cls("purchase_description")}">Order description (untrusted)<input data-k="purchase_description" value="${esc(f.purchase_description)}"></label>
     </fieldset>
+    ${f.ap2 ? `<fieldset><legend>AP2 · what the shop signs, what the agent does</legend>
+      <p class="note" style="margin:0">Empty = the shop signs what its product text says (shown greyed). A signed term counts as confirmed unless the cart tries to manipulate the wallet, the shop is flagged, or it contradicts the shop's own text.</p>
+      ${f.lines.map((l,i) => `<div class="grid2">
+        <label class="${cls(`lines.${i}.signed.size`)}">Line ${i+1}: signed size<input data-sl="${i}" data-sk="size" value="${esc(l.signed.size)}" placeholder="${esc((l.signed_default||{}).size ?? "not signed")}"></label>
+        <label class="${cls(`lines.${i}.signed.return_window_days`)}">Line ${i+1}: signed return window (days)<input type="number" min="0" step="1" data-sl="${i}" data-sk="return_window_days" value="${esc(l.signed.return_window_days)}" placeholder="${esc((l.signed_default||{}).return_window_days ?? "not signed")}"></label></div>`).join("")}
+      <div class="grid2">
+        <label class="${cls("ap2.returnable")}">Signed "returnable"<select data-ap="returnable">${opt("","as in the order terms",f.ap2.returnable)}${["true","false"].map(v=>opt(v,v,f.ap2.returnable)).join("")}</select></label>
+        <label class="${cls("ap2.attack")}">The agent…<select data-ap="attack">${Object.entries(ST.ap2_attacks).map(([k,v])=>opt(k,v,f.ap2.attack)).join("")}</select></label>
+      </div></fieldset>` : ""}
     <div class="total"><span class="note">Total charged, delivery included</span><span><b id="tot">${money(t.amt, f.currency)}</b> <span class="note" id="totchf">${f.currency!=="CHF" ? "= "+money(t.chf) : ""}</span></span>
       ${cap ? `<span class="note ${t.chf>cap?"over":""}" id="capnote">per-order limit ${money(cap)}</span>` : ""}</div>
     <div class="row"><button class="big" id="send">Send to the wallet</button><button class="ghost" id="undo">Undo my edits</button></div>`;
@@ -337,13 +381,17 @@ $("#editor").addEventListener("input", ev => {
   if(el.dataset.k && el.dataset.k !== "merchant_pick"){
     const num = ["delivery_fee","recent_attempt_count_10m"].includes(el.dataset.k);
     setPath(FORM, el.dataset.k, num ? Number(el.value) : el.value);
+  } else if(el.dataset.sl){
+    FORM.lines[+el.dataset.sl].signed[el.dataset.sk] = el.value;
+  } else if(el.dataset.ap){
+    FORM.ap2[el.dataset.ap] = el.value;
   } else if(el.dataset.line){
     const l = FORM.lines[+el.dataset.line], k = el.dataset.lk;
     if(k === "item_id"){ const it = CAT.items.find(x=>x.item_id===el.value); Object.assign(l, {item_id:it.item_id, item_name:it.item_name, item_category:it.item_category}); }
     else l[k] = ["quantity","unit_price"].includes(k) ? Number(el.value) : el.value;
   }
   const lab = el.closest("label");
-  if(lab){ const path = el.dataset.k || `lines.${el.dataset.line}.${el.dataset.lk}`; lab.className = cls(path); }
+  if(lab){ const path = el.dataset.k || (el.dataset.sl ? `lines.${el.dataset.sl}.signed.${el.dataset.sk}` : el.dataset.ap ? `ap2.${el.dataset.ap}` : `lines.${el.dataset.line}.${el.dataset.lk}`); lab.className = cls(path); }
   refreshTotals();
 });
 $("#editor").addEventListener("change", ev => {
@@ -366,6 +414,12 @@ function preset(p){
   }
   if(p === "addon"){ f.lines.push({item_id:"IT0066", item_name:"Extended protection plan", item_category:"subscriptions", quantity:1, unit_price:29, item_details:"Optional add-on service, billed monthly after the first year"}); toast("Slipped a protection plan into the basket."); }
   if(p === "eur" && f.currency !== "EUR"){ const r = CAT.fx[f.currency] / CAT.fx.EUR; f.lines.forEach(l => l.unit_price = Math.round(l.unit_price * r * 100)/100); f.delivery_fee = Math.round(Number(f.delivery_fee||0) * r * 100)/100; f.currency = "EUR"; toast("Same price, billed in EUR."); }
+  if(p === "tamper"){ f.lines[0].unit_price = Math.round(f.lines[0].unit_price * 0.7 * 100)/100; f.ap2.attack = "tamper"; toast("The shop signed the original price; the agent now submits 30% less."); }
+  if(p === "replay" && ST.previous){ const keep = {source_id:f.source_id, timestamp:f.timestamp}; FORM = Object.assign(clone(ST.previous), keep, {related_authorization_id:null}); FORM.ap2 = {...(FORM.ap2||{}), attack:"replay"}; toast("The agent presents the previous order's signed cart again."); }
+  if(p === "shopkey"){ f.ap2.attack = "wrong_shop_key"; toast("The cart names this shop but is signed with another shop's key."); }
+  if(p === "agentkey"){ f.ap2.attack = "wrong_agent_key"; toast("The purchase is signed by an agent the customer never authorised."); }
+  if(p === "withhold"){ f.ap2.attack = "withhold"; toast("The agent pays without showing Viseca the shop-signed cart."); }
+  if(p === "signret"){ f.lines.forEach(l => l.signed.return_window_days = 30); f.ap2.returnable = "true"; toast("The shop signs a 30-day return window and 'returnable'."); }
   if(p === "repeat" && ST.previous){ const keep = {source_id:f.source_id, timestamp:f.timestamp}; FORM = Object.assign(clone(ST.previous), keep, {related_authorization_id:null}); toast("Same shop, basket and price as the previous order."); }
   renderEditor();
 }
@@ -394,15 +448,23 @@ function renderAnswer(){
   const checks = a.checks.slice().sort((x,y)=>order[x.status]-order[y.status]);
   const firstPass = checks.findIndex(c => c.status === "pass");
   const notPass = firstPass < 0 ? checks : checks.slice(0, firstPass), pass = firstPass < 0 ? [] : checks.slice(firstPass);
-  const li = c => `<li><span class="st-${c.status}">${icon[c.status]}</span><span>${esc(c.text)}</span></li>`;
+  const badge = c => c.tier === "ap2" ? ` <span class="pill sig">AP2</span>` : c.provenance === "shop-signed" ? ` <span class="pill sig">shop-signed</span>` : (c.extra || {}).signed_permission ? ` <span class="pill sig">signed</span>` : "";
+  const li = c => `<li><span class="st-${c.status}">${icon[c.status]}</span><span>${esc(c.text)}${badge(c)}</span></li>`;
   const waiting = a.decision === "step_up" && status === "pending";
+  const rc = a.ap2_receipt, hp = ST.resolutions[a.authorization_id];
+  const rcPill = r => r.result === "success" ? `<span class="pill approve">success · token issued</span>` : `<span class="pill ${r.error === "unresolved_constraint" ? "step_up" : "decline"}">${esc(r.error)}</span>`;
+  const ap2box = rc ? `<div class="ap2box"><div class="row"><b>Viseca's signed receipt to the agent:</b> ${rcPill(rc)}</div>
+      ${rc.error === "unresolved_constraint" ? `<span class="note">The autonomous permission isn't enough here, so AP2 switches to Human Present: the customer confirms on Viseca one.</span>` : ""}
+      ${hp ? `<div class="row"><b>Customer on Viseca one:</b> ${rcPill(hp.receipt)} ${hp.signed ? `<span class="note">closed mandate signed by the Trusted Surface (${esc(hp.signed.mode.replace("_"," "))})</span>` : ""}</div>` : ""}
+      <details><summary>Signed cart, mandates and receipt (decoded)</summary><pre class="mono json">${esc(JSON.stringify({receipt: rc, customer: hp || undefined, ...(a.ap2 ? a.ap2.decoded : {})}, null, 1))}</pre></details></div>` : "";
   $("#answer").innerHTML = `
     <div class="verdict"><span class="word ${a.decision}">${WORD[a.decision]}</span>
       <span class="mono">${esc(a.source)} · ${money(a.amount_chf)} · ${a.latency_ms} ms</span>
       ${a.decision === "step_up" && status !== "pending" ? `<span class="pill ${status}">${LABEL[status]} by customer</span>` : ""}</div>
     <div>${esc(a.message)}</div>
-    ${waiting ? `<div class="you"><b>You are now the customer.</b><span class="note">The wallet paused this purchase and is asking you.${ST.revoked ? " Permission was withdrawn: it can only be declined." : ""}</span>
+    ${waiting ? `<div class="you"><b>You are now the customer.</b><span class="note">The wallet paused this purchase and is asking you.${rc ? " Approving signs this checkout on Viseca one (the Trusted Surface)." : ""}${ST.revoked ? " Permission was withdrawn: it can only be declined." : ""}</span>
       <div class="row"><button class="ok" data-res="approve" data-id="${a.authorization_id}" ${ST.revoked?"disabled":""}>Approve</button><button class="no" data-res="decline" data-id="${a.authorization_id}">Decline</button></div></div>` : ""}
+    ${ap2box}
     ${a.flags_created.map(f => `<div class="flagbox"><b>${f.repeat ? "Another incident for" : "Alert sent: new rule for"} ${esc(f.merchant_name)}.</b> From now on the wallet asks the customer before any purchase there, because ${esc(f.reason)}</div>`).join("")}
     ${a.edits.length ? `<div class="editlist"><b>You changed ${a.edits.length} thing${a.edits.length===1?"":"s"}:</b> ${a.edits.map(esc).join(" · ")}</div>` : `<p class="note">Sent exactly as in the scenario file.</p>`}
     ${notPass.length ? `<ul class="checks">${notPass.map(li).join("")}</ul>` : ""}

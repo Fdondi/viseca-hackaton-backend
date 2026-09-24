@@ -23,7 +23,7 @@ DEADLINE_MARGIN_S = 1.5
 
 class Session:
     def __init__(self, platform: Platform | None = None, pack: Pack | None = None, engine: Engine | None = None,
-                 use_llm: bool = False) -> None:
+                 use_llm: bool = False, ap2: bool = False) -> None:
         from . import llm
         self.pack = pack or load()
         self.platform = platform or SimPlatform(self.pack)
@@ -38,6 +38,25 @@ class Session:
         self.errors: list[dict] = []
         self.listeners: list = []
         self._pool = ThreadPoolExecutor(max_workers=4)
+        self.keyring = None                      # AP2 (simulator only): see enable_ap2
+        self.ap2_presented: dict[str, tuple] = {}   # authorization_id → (presentation, verification)
+        if ap2:
+            self.enable_ap2()
+
+    def enable_ap2(self, on: bool = True) -> None:
+        """Shops sign their carts and the agent carries AP2 mandates. Simulator only: the hosted
+        API has no AP2. Applies to mandates confirmed from now on."""
+        from .ap2 import Ap2Sim, Keyring
+        if not on:
+            self.keyring = None
+            if isinstance(self.platform, SimPlatform):
+                self.platform.ap2 = None
+            return
+        if not isinstance(self.platform, SimPlatform):
+            raise ValueError("AP2 is only simulated: the hosted API does not carry AP2 mandates.")
+        if self.keyring is None:
+            self.keyring = Keyring()
+            self.platform.ap2 = Ap2Sim(self.pack, self.keyring)
 
     # ------------------------------------------------------------ setup
     def customer_for(self, scenario_id: str) -> tuple[str, str]:
@@ -56,7 +75,7 @@ class Session:
             rev = llm.STATUS.get("last_review") or {"proposed": 0, "dropped": []}
             model = {**{k: llm.STATUS[k] for k in ("provider", "model", "last_error", "last_latency_s")},
                      "proposed": rev["proposed"], "suggested": len(draft.hard_rules) - before,
-                     "dropped": [{"text": describe(d["rule"]), "why": d["why"]} for d in rev["dropped"]]}
+                     "dropped": [{"text": _dropped_text(d["rule"]), "why": d["why"]} for d in rev["dropped"]]}
         _, card = self.customer_for(scenario_id)
         bt = backtest(self.pack, self.engine.profile(card), draft.hard_rules)
         return {"draft": draft.as_dict(), "backtest": bt, "profile": self.engine.profile(card).summary(), "model": model}
@@ -70,6 +89,12 @@ class Session:
         with self.lock:
             self.mandates[m["mandate_id"]] = {"scenario_id": scenario_id, "customer_id": customer, "card_id": card,
                                               "draft": draft if isinstance(draft, dict) else draft.as_dict()}
+        if self.keyring:
+            from .ap2 import open_mandates
+            om = open_mandates(self.pack, m, card, self.keyring)   # Viseca one signs what the customer confirmed
+            self.platform.ap2.register(m["mandate_id"], om)
+            self.mandates[m["mandate_id"]]["ap2"] = om.as_dict()
+            m = {**m, "ap2": om.as_dict()}
         return m
 
     def start(self, scenario_id: str, mandate_id: str) -> dict:
@@ -87,13 +112,21 @@ class Session:
             self.errors.append({"authorization_id": envelope.get("authorization_id"), "errors": errs[:5]})
         deadline = _parse(event.get("deadline_at"))
         budget = (deadline - datetime.now(timezone.utc)).total_seconds() - DEADLINE_MARGIN_S if deadline else 6.5
-        fut = self._pool.submit(self.engine.decide, event, run_id)
+        pres, ver = envelope.get("ap2"), None
+        if pres and self.keyring:
+            from .ap2 import verify
+            ver = verify(pres, event, self.keyring, self.pack)
+        fut = self._pool.submit(self.engine.decide, event, run_id, ver)
         try:
             result = fut.result(timeout=max(budget, 0.1))
         except FutureTimeout:
             result = self._fallback(event, run_id, "deadline_fallback")
         except Exception as exc:  # never leave a purchase without an answer
             result = self._fallback(event, run_id, "rule_not_understood", repr(exc))
+        if ver and not result.get("redelivery"):
+            from .ap2 import receipt
+            result["ap2_receipt"] = receipt(result, ver, self.keyring)
+            self.ap2_presented[result["authorization_id"]] = (pres, ver)
         if not result.get("redelivery"):
             try:
                 ack = self.platform.post_decision(result["authorization_id"], api_body(result))
@@ -122,6 +155,12 @@ class Session:
     # ------------------------------------------------------------ customer actions
     def resolve(self, run_id: str, authorization_id: str, decision: str) -> dict:
         res = self.engine.resolve(run_id, authorization_id, decision)
+        if authorization_id in self.ap2_presented:
+            from .ap2 import human_present
+            pres, ver = self.ap2_presented[authorization_id]
+            res["ap2"] = human_present(pres, ver, decision, authorization_id, self.keyring)
+            rec = self.engine.store.runs[run_id].get(authorization_id)
+            rec.result["ap2_resolution"] = res["ap2"]
         try:
             self.platform.resolve(authorization_id, {k: res[k] for k in ("decision", "customer_message", "evidence")})
         except PlatformError as exc:
@@ -192,6 +231,15 @@ class Session:
                     except RevokedError as exc:
                         res["resolution"] = {"error": str(exc)}
         return out
+
+
+def _dropped_text(rule: dict) -> str:
+    """A dropped suggestion in words; an empty value can't be described, so name the field instead."""
+    from .fields import describe
+    v = rule.get("value")
+    if v in (None, "") or (isinstance(v, list) and not [x for x in v if str(x).strip()]):
+        return f"A rule on '{rule['field']}' with no value given"
+    return describe(rule)
 
 
 def _parse(value):

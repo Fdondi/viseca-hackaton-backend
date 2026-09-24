@@ -35,7 +35,7 @@ def _new_session() -> None:
     w = Worker(s, wait=25 if live else 1)
     w.start()
     _state.update(session=s, worker=w, live=live, draft=None, scenario=None, mandate_id=None, run_id=None,
-                  compiled=None, started_at=None)
+                  compiled=None, started_at=None, ap2_open=None)
 
 
 _new_session()
@@ -60,6 +60,10 @@ class FlagIn(BaseModel):
     mode: str
 
 
+class Ap2In(BaseModel):
+    enabled: bool
+
+
 class TightenIn(BaseModel):
     max_per_order_chf: float | None = None
     uncertainty: str | None = None
@@ -78,7 +82,17 @@ def scenarios():
         cust, card = s.customer_for(sid)
         out.append({"scenario_id": sid, "name": sc["scenario_name"], "instruction": sc["cardholder_instruction"],
                     "persona": s.pack.customers[cust]["persona_name"], "card_id": card, "events": int(sc["event_count"])})
-    return {"scenarios": out, "live": _state["live"]}
+    return {"scenarios": out, "live": _state["live"], "ap2": bool(s.keyring)}
+
+
+@app.post("/api/ap2")
+def ap2(body: Ap2In):
+    """Simulator only: shops sign carts, Viseca one signs the agent's permission (AP2)."""
+    with _lock:
+        if _state["live"]:
+            raise HTTPException(409, "The hosted API does not carry AP2 mandates.")
+        S().enable_ap2(body.enabled)
+        return {"ap2": bool(S().keyring)}
 
 
 @app.post("/api/compile")
@@ -96,6 +110,7 @@ def confirm():
             raise HTTPException(400, "Compile an instruction first.")
         m = S().confirm(_state["compiled"]["draft"], _state["scenario"])
         _state["mandate_id"] = m["mandate_id"]
+        _state["ap2_open"] = m.get("ap2")
         return m
 
 
@@ -188,6 +203,9 @@ def state():
             "status": rec.status if rec else None, "resolved_by": rec.resolved_by if rec else None,
             "headline": r["headline"], "message": r["customer_message"], "reason_codes": r["reason_codes"],
             "checks": r["checks"], "security_flags": r.get("security_flags", []),
+            "ap2_receipt": (r.get("ap2_receipt") or {}).get("payload"),
+            "ap2_resolution": ((rec.result.get("ap2_resolution") or {}).get("receipt") or {}).get("payload") if rec else None,
+            "ap2_decoded": (r.get("ap2") or {}).get("decoded"),
             "seconds_left": _human_seconds_left(r["authorization_id"]) if rec and rec.status == "pending" else None,
         })
     cust = s.customer_for(_state["scenario"])[0] if _state.get("scenario") else None
@@ -201,6 +219,7 @@ def state():
             pass
     return {
         "live": _state["live"], "scenario": _state.get("scenario"), "mandate": mandate,
+        "ap2_enabled": bool(s.keyring), "ap2": _state.get("ap2_open"),
         "revoked": bool(ctl and _state.get("mandate_id") in ctl.revoked_mandates),
         "run": s.platform.run_status(run_id) if run_id else None,
         "feed": feed,
