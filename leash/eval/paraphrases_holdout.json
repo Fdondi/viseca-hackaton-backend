@@ -1,0 +1,23 @@
+{
+  "_note": "Holdout set written after the first evaluation round and before any compiler fix.",
+  "SCEN0000": [
+    "Only buy a single ordinary grocery item, CHF 20 at most, and only from a shop I use regularly. If you are unsure, ask me.",
+    "Buy me one ordinary grocery item; it must cost CHF 20 or less and come from a shop I use regularly. Ask me when uncertain."
+  ],
+  "SCEN0001": [
+    "Please order household groceries for delivery. Per order: at most CHF 120 including delivery. Over any seven days: at most CHF 300 in total. Ask me when uncertain.",
+    "Order household groceries for delivery, keeping every order at or below CHF 120 including delivery, with a total of CHF 300 or less across any seven days. Ask me when unsure."
+  ],
+  "SCEN0002": [
+    "Road-running shoes, size 43, to replace my old pair: pay CHF 200 or less, buy only from a specialist sports retailer, and only if I can return them within 14 days or more. Ask me when uncertain.",
+    "Find road-running shoes in size 43 from a specialist sports retailer. The price must be no more than CHF 200, and returns must be possible within 14 days or more. Ask me when unsure."
+  ],
+  "SCEN0003": [
+    "Clothing for me, maximum CHF 250 per order, only from shops I have used before. If it looks like someone other than me is driving the session, pause. Ask me when uncertain.",
+    "Buy clothing from shops I have used before, each order no more than CHF 250. Pause anything that looks like someone else is driving. When unsure, ask me."
+  ],
+  "SCEN0004": [
+    "I chose a 27-inch monitor: buy it for CHF 400 or less from a seller I have bought from before, and do not add anything I did not ask for. Ask me when uncertain.",
+    "Buy the 27-inch monitor I selected. Budget CHF 400 or less; only a seller I have bought from before; no add-ons. Ask me when in doubt."
+  ]
+}

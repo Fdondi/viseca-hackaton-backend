@@ -1,0 +1,38 @@
+{
+  "_note": "Written before the compiler. Each paraphrase should compile to the same rule set as the canonical instruction.",
+  "SCEN0000": [
+    "Please get me a single ordinary grocery item from a shop I use regularly, CHF 20 or less. Ask me if you're unsure.",
+    "One grocery item, max CHF 20, only from my regular shop. When uncertain, ask me.",
+    "Buy one everyday grocery item costing no more than CHF 20 at a store I use regularly. Ask me when in doubt.",
+    "I need one grocery item for up to CHF 20 from the shop I regularly use. Check with me if uncertain.",
+    "Grab one ordinary grocery item, CHF 20 or less, from a shop I use regularly; ask me when uncertain."
+  ],
+  "SCEN0001": [
+    "Order our household groceries for delivery. Each order must stay at or below CHF 120 including delivery, and the total across any seven days at or below CHF 300. Ask me when uncertain.",
+    "Get our household groceries delivered. No order above CHF 120 including delivery, and no more than CHF 300 in total across any seven days. Ask me when unsure.",
+    "Order household groceries for delivery; keep each order at or below CHF 120 including delivery and keep the total across any 7 days at or below CHF 300. Ask me when uncertain.",
+    "Please order our household groceries for delivery, up to CHF 120 per order including delivery and up to CHF 300 across any seven days. If uncertain, ask me.",
+    "Household groceries for delivery: at most CHF 120 per order including delivery, at most CHF 300 total across any seven days. Ask me when uncertain."
+  ],
+  "SCEN0002": [
+    "Replace my worn road-running shoes in size 43. Only buy from a specialist sports retailer, only if returns are possible within 14 days or more, and pay no more than CHF 200. Ask me when uncertain.",
+    "I need new road-running shoes, size 43, from a specialist sports retailer, returnable within 14 days or more, up to CHF 200. Ask me when unsure.",
+    "Buy road-running shoes in size 43 for no more than CHF 200 from a specialist sports retailer; the order must be returnable within 14 days or more. Ask me when uncertain.",
+    "Replace my road-running shoes (size 43). Specialist sports retailer only, returns within 14 days or more, CHF 200 or less. Ask me when uncertain.",
+    "Get me road-running shoes, size 43, CHF 200 or less, from a specialist sports retailer that accepts returns within 14 days or more. Check with me when uncertain."
+  ],
+  "SCEN0003": [
+    "The agent may buy clothing for me, up to CHF 250 per order, from shops I have used before. Pause anything that looks like someone other than me is driving the session. Ask me when uncertain.",
+    "You can buy clothes for me, at most CHF 250 per order, only from shops I have used before. Pause if it looks like someone other than me is in control. Ask me when unsure.",
+    "Clothing purchases allowed up to CHF 250 per order from shops I have used before; pause anything that looks like someone other than me is driving. Ask me when uncertain.",
+    "Buy clothing up to CHF 250 per order from shops I have used before. If someone other than me seems to be driving the session, pause. Ask me when uncertain.",
+    "The agent may buy me clothing for CHF 250 or less per order, only from shops I have used before, and should pause when someone other than me appears to be driving. Ask me when in doubt."
+  ],
+  "SCEN0004": [
+    "Buy the 27-inch monitor I chose, from a seller I have bought from before, for CHF 400 or less. Don't add anything I did not ask for. Ask me when uncertain.",
+    "Purchase the 27-inch monitor I picked, from a seller I have bought from before, no more than CHF 400. Do not add anything I did not ask for. Ask me when unsure.",
+    "Get me the 27-inch monitor I chose for up to CHF 400 from a seller I have bought from before; do not add anything I did not ask for. Ask me when uncertain.",
+    "The 27-inch monitor I chose: CHF 400 or less, from a seller I have bought from before, and do not add anything I did not ask for. Ask me when uncertain.",
+    "Buy my chosen 27-inch monitor for CHF 400 or less from a seller I have bought from before. Nothing extra: do not add anything I did not ask for. When uncertain, ask me."
+  ]
+}
