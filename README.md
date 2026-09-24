@@ -60,10 +60,13 @@ Three areas, for explaining the system:
    - The notification opens a page with the amount, why the wallet is asking, and the shop's text shown verbatim, plus Approve/Decline.
 2. **The shopping agent (black box).** It sends the story's proposals one at a time, exactly as in the data (SCEN0004's shop texts already carry the injections).
    - Per proposal, a checkbox decides whether **the shop signs its cart (AP2)**. That is the shop's choice, not the customer's. Viseca one always signs the customer's AP2 permission at confirm, and it's used whenever a shop signs.
-   - The request is shown laid out: shop, session, order terms, basket with the shop's text marked untrusted, totals, and the mandate snapshot as plain rules. The raw JSON is one click away.
-   - Below it, the formatted answer, and later the customer's resolution.
+   - The proposals sent are listed with their answers; click one to inspect it in area 3.
 3. **The Viseca server.**
-   - **Setup chain:** customer → fixed parser → LLM suggestions → fixed review → confirmation → mandate.
+   - **The rules as structure:**
+     - the `Mandate` and `Rule` classes (field, operator, value, currency, scope, period) and how rules combine;
+     - where a model is involved: setup only, with why each suggestion was dropped;
+     - one object box per confirmed rule, grouped by origin (your words, with the phrase; model suggestion you confirmed; always on);
+     - on each box, its parameters and meaning, and tags for fixed code, the data it relies on (transaction vs vendor-supplied vs Viseca's records) and any LLM involvement.
    - **For the selected proposal:**
      - every field received, tagged as transaction data, vendor-supplied text (untrusted), shop-signed (AP2) or customer;
      - Viseca-side processing: the wall, detectors, card history, the run ledger;

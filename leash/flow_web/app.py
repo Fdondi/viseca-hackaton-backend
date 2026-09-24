@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from .. import lineage
 from ..data import load
 from ..engine import RevokedError
+from ..fields import SAFETY_NET as SAFETY_FIELDS
 from ..fields import describe
 from ..platform import SimPlatform
 from ..session import Session
@@ -286,6 +287,53 @@ def _ap2_diff(real: dict, base: dict, rules: list[dict]) -> dict:
             "added": added, "changed": changed, "removed": removed, "evidence": evidence}
 
 
+# ------------------------------------------------------------------ the rules, as structure
+DATA_KIND = {"transaction": "transaction data", "vendor": "vendor-supplied data", "viseca": "Viseca's records",
+             "customer": "your controls", "signed": "AP2 signatures"}
+
+
+def _data_kinds(field: str) -> list[str]:
+    kinds = []
+    for k in lineage.reads(field):
+        node_reads = lineage.NODES.get(k, {}).get("reads", [])
+        if k in lineage.FREE_TEXT or k.startswith("wall.") or any(r in lineage.FREE_TEXT for r in node_reads):
+            kind = "vendor"
+        elif k.startswith(("viseca.", "context.")):
+            kind = "viseca"
+        elif k.startswith(("customer.", "mandate.")):
+            kind = "customer"
+        elif k.startswith("ap2."):
+            kind = "signed"
+        else:
+            kind = "transaction"
+        if kind not in kinds:
+            kinds.append(kind)
+        for r in node_reads:                               # e.g. the lookalike detector also reads the ID and card history
+            extra = "viseca" if r.startswith("viseca.") else None if r in lineage.FREE_TEXT else "transaction"
+            if extra and extra not in kinds:
+                kinds.append(extra)
+    return kinds
+
+
+def _rules_view() -> list[dict]:
+    from .. import llm
+    extraction = bool(ST.get("session") and ST["session"].use_llm and llm.extraction_enabled())
+    out = []
+    for n in ST.get("notes") or []:
+        f = n["rule"]["field"]
+        origin = ("words" if n["tier"] == "your rules" else "llm" if n["tier"].startswith("suggested") else "always")
+        out.append({
+            "index": n["index"], "origin": origin, "phrase": n["source"] if origin == "words" else None,
+            "edited": n.get("edited", False), "text": n["text"], "rule": n["rule"],
+            "kind": "signal" if origin == "always" and f in {r["field"] for r in SAFETY_FIELDS} else "rule",
+            "data": [DATA_KIND[k] for k in _data_kinds(f)], "how": lineage.how(f),
+            "llm_setup": origin == "llm",
+            "llm_runtime": ("fallback reads this fact from the shop text if the patterns miss it; kept only if verbatim"
+                            if extraction and f in ("extracted.size", "extracted.return_days") else None),
+        })
+    return out
+
+
 # ------------------------------------------------------------------ state
 def _session() -> Session:
     if "session" not in ST:
@@ -295,7 +343,7 @@ def _session() -> Session:
 
 def _state() -> dict:
     out = {"step": ST.get("step", "setup"), "customer": ST.get("customer"), "setup": ST.get("setup"),
-           "notes": ST.get("notes"), "policy": ST.get("policy")}
+           "notes": ST.get("notes"), "policy": ST.get("policy"), "rules_view": _rules_view()}
     if ST.get("run_id"):
         s = _session()
         run = s.platform.runs[ST["run_id"]]

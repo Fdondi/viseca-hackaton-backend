@@ -119,6 +119,22 @@ details summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:12.
 .panel{background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
 .eyebrow{font:600 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
 h2{font:650 19px/1.2 var(--display);margin:0}
+.rtop{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:6px}
+.attr{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;font:11.5px/1.45 var(--mono)}
+.attr .k{color:var(--muted)}.attr .v{overflow-wrap:anywhere}
+.rgroup{margin-top:10px}
+.rgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
+.robj{border:1.5px solid var(--ink);border-radius:4px;background:var(--surface);font-size:12.5px;display:flex;flex-direction:column}
+.robj.llm{border:1.5px dashed var(--llm);background:var(--llm-soft)}
+.robj.always{border-color:var(--fixed)}
+.robj > .hd{padding:6px 10px;border-bottom:1px solid var(--rule);text-align:center}
+.robj > .hd .st{display:block;font:600 10.5px/1.3 var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.robj.llm > .hd .st{color:var(--llm)}
+.robj > .hd b{font:650 12.5px/1.3 var(--mono)}
+.robj > .cp{padding:6px 10px;border-top:1px solid var(--rule);display:flex;flex-direction:column;gap:2px}
+.robj > .cp:first-of-type{border-top:0}
+.robj > .cp.tags{flex-direction:row;flex-wrap:wrap;gap:4px;margin-top:auto}
+.uml.cls > .cp{gap:3px}
 .chain{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px 34px;align-items:stretch}
 .chain .uml:nth-child(3n)::after,.chain .uml:nth-child(3n)::before{display:none}
 @media (max-width:700px){.chain{grid-template-columns:1fr}}
@@ -255,7 +271,7 @@ svg#wires path{fill:none;stroke-width:1.6}
   <div class="dia">
     <div class="area-h"><span class="n">3</span><h2>Viseca server</h2><span class="io">receives the agent's proposals · answers the agent · notifies the phone only to ask</span></div>
     <section class="panel" id="setup-panel">
-      <div class="eyebrow">Setup · from the customer's words to confirmed rules</div>
+      <div class="eyebrow">The rules · structure, parameters, and where a model is involved</div>
       <div id="setup"></div>
     </section>
     <section class="panel" id="flow-panel">
@@ -459,11 +475,8 @@ function renderAgent(){
     $("#agent").innerHTML = `<p class="empty">Idle until the customer confirms the rules on the phone. From then on it sends one proposal at a time; the wallet answers each within seconds.</p>`;
     return;
   }
-  const n = ST.next, ex = ST.explain;
-  const final = f => f.decision === "step_up" ? (f.status === "pending" ? "waiting for the customer" : `customer ${f.status === "approved" ? "approved" : f.status}`) : "";
-  const cur = ex && ST.feed.find(f => f.authorization_id === ex.authorization_id);
+  const n = ST.next;
   $("#agent").innerHTML = `<div class="bb">
-    <div class="col">
       <div class="bbox">
         ${n ? `<span class="note">Proposal ${ST.feed.length + 1} of ${ST.total}</span>
           <b>${esc(n.items.join(", "))}</b><span>${esc(n.merchant)} · ${esc(n.currency)} ${Number(n.amount).toFixed(2)}</span>
@@ -473,17 +486,9 @@ function renderAgent(){
       </div>
       ${ST.feed.length ? `<div class="sent"><span class="colh">Proposals sent · click to inspect</span>${ST.feed.slice().reverse().map(f => `
         <button class="${f.authorization_id === ST.selected ? "sel" : ""}" data-pick="${f.authorization_id}"><span>${esc(f.source)} · ${esc(f.merchant)} · CHF ${Number(f.amount_chf).toFixed(2)}${f.ap2 ? ` <span class="pill signed">AP2</span>` : ""}</span>
-          <span class="row" style="gap:4px"><span class="pill ${f.decision}">${esc(LABEL[f.decision])}</span>${f.decision === "step_up" && f.status !== "pending" ? `<span class="pill ${f.status}">${esc(LABEL[f.status])}</span>` : ""}</span></button>`).join("")}</div>` : ""}
-    </div>
-    <div class="col">
-      ${ex ? `<div class="msg">sent → Viseca: the proposal ${esc(ex.source)}</div>
-        ${requestView(ex.view)}
-        <details><summary>Raw request, exactly as received</summary><pre class="json req" style="margin-top:6px">${esc(compact(ex.request))}</pre></details>
-        <div class="msg">← answer returned to the agent after ${ex.latency_ms} ms</div>
-        ${answerView(ex.answer, ex.receipt)}
-        ${cur && cur.decision === "step_up" ? `<div class="msg">${cur.status === "pending" ? "… the agent waits: the customer was notified on the phone" : `← later: ${esc(final(cur))} (resolution posted)`}</div>` : ""}`
-        : `<p class="empty">Send a proposal to see the exact request and the answer.</p>`}
-    </div></div>`;
+          <span class="row" style="gap:4px"><span class="pill ${f.decision}">${esc(LABEL[f.decision])}</span>${f.decision === "step_up" && f.status !== "pending" ? `<span class="pill ${f.status}">${esc(LABEL[f.status])}</span>` : ""}</span></button>`).join("")}</div>`
+        : `<p class="empty">Nothing sent yet. What Viseca receives, and how it decides, appears in area 3.</p>`}
+    </div>`;
   const nb = $("#next");
   if(nb) nb.onclick = async () => {
     nb.disabled = true;
@@ -498,23 +503,55 @@ function umlBox(kind, stereo, title, body, extra=""){
   return `<div class="uml ${kind} ${extra}"><div class="hd"><span class="st">«${esc(stereo)}»</span><b>${esc(title)}</b></div>${body.map(b => `<div class="cp">${b}</div>`).join("")}</div>`;
 }
 function renderSetup(){
-  if(!ST || !ST.setup){ $("#setup").innerHTML = `<p class="empty">Write an instruction on the phone. This shows which part turned it into rules: fixed parsing, the model's suggestions, the review, and you.</p>`; return; }
+  const rv = ST && ST.rules_view;
+  if(!rv || !rv.length){ $("#setup").innerHTML = `<p class="empty">Write an instruction on the phone. The rules it becomes appear here: their structure, their parameters, where each came from, and whether a model is involved.</p>`; return; }
   const s = ST.setup, m = s.model || {};
   const modelOff = !m.proposed && m.last_error;
-  const boxes = [
-    umlBox("customer", "customer · phone", "Instruction", [`<span>${esc(s.instruction)}</span>`]),
-    umlBox("", "fixed code", "Rule parser", [`<span class="note">${s.parser.length} rules, each from a phrase:</span>` + s.parser.map(p => `<div class="mono">“${esc(p.phrase)}” → ${esc(p.text)}</div>`).join("")]),
-    umlBox("llm", "LLM · " + ((m.model || m.provider || "model").split("/").pop()), "Suggests extra rules",
-      [modelOff ? `<span>Not used: ${esc(m.last_error)}</span>` : `<span>${m.proposed || 0} suggestions</span><span class="note">It sees only your words, never a purchase.</span>`], modelOff ? "off" : ""),
-    umlBox("", "fixed code", "Review of suggestions", [
-      `<span>${m.suggested || 0} kept, ${(m.dropped || []).length} dropped</span>` + (m.dropped || []).map(d => `<div class="note">✕ ${esc(d.text)}: ${esc(d.why)}</div>`).join("")
-      + (s.suggested.length ? s.suggested.map(t => `<div>✓ ${esc(t)}</div>`).join("") : "")]),
-    umlBox("customer", "customer · phone", s.confirmed ? "Confirmed" : "Checks the form", [
-      s.confirmed ? (s.edits.length ? s.edits.map(e => `<div class="note">${esc(e)}</div>`).join("") : `<span class="note">No edits.</span>`) : `<span class="note">Waiting on the phone…</span>`]),
-    umlBox("", "fixed code", "Mandate", [
-      s.confirmed ? `<span class="mono">${esc(s.mandate_id)}</span><span>${s.rules} rules (incl. ${s.always_on.length} always-on)</span>${s.ap2 ? `<span class="pill signed">+ AP2 permission signed by Viseca one</span><span class="note">used whenever a shop signs its cart</span>` : ""}` : `<span class="note">not yet</span>`]),
-  ];
-  $("#setup").innerHTML = `<div class="chain">${boxes.join("")}</div>`;
+  const mname = (m.model || m.provider || "model").split("/").pop();
+  const pol = {ask:"ask the customer", decline:"decline", approve:"approve (manipulation still asks)"}[ST.policy] || ST.policy;
+  const attrs = r => ["field", "operator", "value", "currency", "scope", "period_days"].filter(k => r.rule[k] !== undefined && r.rule[k] !== null)
+    .map(k => `<div class="attr"><span class="k">${k}</span><span class="v">${esc(fmt(r.rule[k]))}</span></div>`).join("");
+  const origin = r => r.origin === "words" ? `«your words: “${esc(r.phrase)}”»${r.edited ? " · edited by you" : ""}`
+    : r.origin === "llm" ? `«suggested by ${esc(mname)} · confirmed by you»${r.edited ? " · edited" : ""}` : r.kind === "signal" ? "«always-on safety signal»" : "«always-on rule»";
+  const box = r => `<div class="robj ${r.origin}">
+      <div class="hd"><span class="st">${origin(r)}</span><b>rule[${r.index}] : Rule</b></div>
+      <div class="cp">${attrs(r)}</div>
+      <div class="cp"><span>${esc(r.text)}</span></div>
+      <div class="cp tags">
+        <span class="pill fixed" title="${esc(r.how)}">evaluated by fixed code</span>
+        ${r.data.map(d => `<span class="pill ${d === "vendor-supplied data" ? "free" : d === "AP2 signatures" ? "signed" : "tx"}">${esc(d)}</span>`).join("")}
+        ${r.llm_setup ? `<span class="pill llm">LLM proposed it at setup</span>` : ""}
+        ${r.llm_runtime ? `<span class="pill llm" title="${esc(r.llm_runtime)}">LLM may read the fact at run time (verbatim only)</span>` : ""}
+        ${!r.llm_setup && !r.llm_runtime ? `<span class="pill tx">no LLM</span>` : ""}
+        ${r.kind === "signal" ? `<span class="pill unknown">can only ask, never approve</span>` : ""}
+      </div></div>`;
+  const group = (title, note, rs) => rs.length ? `<div class="rgroup"><div class="colh">${title} · ${rs.length}</div><p class="note" style="margin:0 0 8px">${note}</p><div class="rgrid">${rs.map(box).join("")}</div></div>` : "";
+  const words = rv.filter(r => r.origin === "words"), ai = rv.filter(r => r.origin === "llm"), always = rv.filter(r => r.origin === "always");
+  $("#setup").innerHTML = `
+    <div class="rtop">
+      <div class="uml cls"><div class="hd"><span class="st">«class»</span><b>Mandate</b></div>
+        <div class="cp"><div class="attr"><span class="k">instruction</span><span class="v">string · your words</span></div>
+          <div class="attr"><span class="k">hard_rules</span><span class="v">Rule[${rv.length}] · all must hold</span></div>
+          <div class="attr"><span class="k">uncertainty_policy</span><span class="v">${esc(ST.policy)} → ${esc(pol)}</span></div>
+          ${s.mandate_id ? `<div class="attr"><span class="k">mandate_id</span><span class="v">${esc(s.mandate_id)}${s.ap2 ? " · AP2 permission signed by Viseca one" : ""}</span></div>` : `<div class="attr"><span class="k">status</span><span class="v">draft: the customer hasn't confirmed</span></div>`}</div></div>
+      <div class="uml cls"><div class="hd"><span class="st">«class»</span><b>Rule</b></div>
+        <div class="cp"><div class="attr"><span class="k">field</span><span class="v">authorization.* · items.* · derived.* · extracted.* · security.*</span></div>
+          <div class="attr"><span class="k">operator</span><span class="v">&lt; ≤ = ≠ &gt; ≥ in not_in</span></div>
+          <div class="attr"><span class="k">value</span><span class="v">number · string · list</span></div>
+          <div class="attr"><span class="k">currency?</span><span class="v">CHF · EUR · GBP · USD</span></div>
+          <div class="attr"><span class="k">scope? / period_days?</span><span class="v">purchase · period of N days</span></div></div>
+        <div class="cp"><span class="note">evaluate(purchase) → pass · fail · unknown</span></div></div>
+      <div class="uml cls"><div class="hd"><span class="st">«fixed code»</span><b>combine</b></div>
+        <div class="cp"><span>any fail → decline</span><span>any unknown → ${esc(pol)}</span><span>all pass → approve</span>
+          <span class="note">Signals that something is manipulated are never approved away.</span></div></div>
+      <div class="uml ${modelOff ? "llm off" : "llm"} cls"><div class="hd"><span class="st">«LLM · ${esc(mname)}»</span><b>where a model is involved</b></div>
+        <div class="cp"><span>Setup only: it read your words and ${modelOff ? `was not used (${esc(m.last_error)})` : `proposed ${m.proposed} rules; ${m.suggested} kept after the fixed review, ${(m.dropped || []).length} dropped`}.</span>
+          <span>It never sees a purchase, and never decides one.</span>
+          ${(m.dropped || []).length ? `<details><summary>Why suggestions were dropped</summary><ul class="note" style="margin:4px 0 0;padding-left:16px">${m.dropped.map(d => `<li>${esc(d.text)}: ${esc(d.why)}</li>`).join("")}</ul></details>` : ""}</div></div>
+    </div>
+    ${group("From your words", "Found by the fixed parser in your instruction; the phrase is shown on each rule.", words)}
+    ${group("Suggested by the model", "Proposed by the LLM, kept only if grounded in your words, and confirmed by you.", ai)}
+    ${group("Always on", "Added to every mandate. Signals can only make a decision stricter.", always)}`;
 }
 
 // ------------------------------------------------------------------ one purchase
