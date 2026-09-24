@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mandate Parsing Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/lab.css">
+<style>
+main{grid-template-columns:minmax(300px,440px) minmax(0,1fr)}
+@media (max-width:1000px){main{grid-template-columns:1fr}}
+#instr{min-height:150px;font-size:14px}
+.words{font-size:15px;line-height:1.7;padding:10px 12px;border-radius:8px;background:var(--paper)}
+.stage{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+</style>
+</head>
+<body>
+<header>
+  <div class="row"><h1>Mandates</h1><span class="sub">one instruction for the agent → rules the customer confirms</span></div>
+  <nav id="nav"></nav>
+</header>
+<main>
+  <section class="panel">
+    <div class="eyebrow">Input · the customer's instruction</div>
+    <label>Start from a story<select id="ex"></select></label>
+    <label>Instruction (edit freely)<textarea id="instr"></textarea></label>
+    <label class="check"><input type="checkbox" id="model"><span id="model-l">Also ask the model for extra rules</span></label>
+    <button id="go">Parse</button>
+    <span class="note">Try: “Order groceries for delivery, at most CHF 80 per order and CHF 250 a week, never from Neighbour Pantry. Decline if unsure.”</span>
+  </section>
+  <section class="col">
+    <div class="panel"><div class="eyebrow">Which words became rules</div><div id="words" class="words"><span class="note">Parse an instruction.</span></div>
+      <span class="note">Underlined: a phrase the fixed parser turned into a rule (hover for the rule).</span></div>
+    <div class="panel"><div class="eyebrow">Stages</div><div id="stages" class="stage"></div></div>
+    <div class="panel"><div class="eyebrow" id="rules-h">Rules</div><div id="rules"></div></div>
+    <div class="panel"><div class="eyebrow">Replayed on the last 12 months of this card</div><div id="bt"></div></div>
+  </section>
+</main>
+<script src="/lab.js"></script>
+<script>
+let EX = [], LAST = null;
+$("#nav").innerHTML = nav("mandate");
+function box(r){
+  const origin = r.origin === "words" ? `«your words: “${esc(r.phrase)}”»` : r.origin === "llm" ? "«suggested by the model · review kept it»" : r.kind === "signal" ? "«always-on safety signal»" : "«always-on rule»";
+  return `<div class="robj ${r.origin}"><div class="hd"><span class="st">${origin}</span><b>rule[${r.index}] : Rule</b></div>
+    <div class="cp">${ruleAttrs(r.rule)}</div><div class="cp"><span>${esc(r.text)}</span></div>
+    <div class="cp tags">${WHO(r)}${r.data.map(x => `<span class="pill ${DATA_PILL(x)}">${esc(x)}</span>`).join("")}${r.kind === "signal" ? `<span class="pill unknown">can only ask</span>` : ""}</div></div>`;
+}
+async function go(){
+  $("#go").disabled = true; $("#go").textContent = "Parsing…";
+  try{
+    LAST = await api("/api/compile", {instruction:$("#instr").value, scenario_id:$("#ex").value, use_model:$("#model").checked});
+    render();
+  }catch(e){ toast(e.message); }
+  $("#go").disabled = false; $("#go").textContent = "Parse";
+}
+function render(){
+  const d = LAST, m = d.model;
+  const words = d.rules.filter(r => r.origin === "words"), ai = d.rules.filter(r => r.origin === "llm"), always = d.rules.filter(r => r.origin === "always");
+  $("#words").innerHTML = highlight($("#instr").value, words.map(r => ({text: r.phrase, title: r.text})));
+  const modelOff = !m.proposed && m.last_error;
+  // one line per rule: what it says, its parameters, and the words it came from
+  const param = r => `${r.field} ${r.operator} ${fmt(r.value)}${r.period_days ? ` · ${r.period_days} days` : ""}${r.currency ? ` · ${r.currency}` : ""}`;
+  const line = (mark, cls, text, rule, extra) => `<li class="stage-rule ${cls}"><span class="mk">${mark}</span><div>${esc(text)}${rule ? `<code>${esc(param(rule))}</code>` : ""}${extra || ""}</div></li>`;
+  const from = q => q && q !== "default" && q !== "llm" ? `<span class="from">← “${esc(q)}”</span>` : "";
+  const list = items => items.length ? `<ul class="stage-list">${items.join("")}</ul>` : "";
+  // each suggestion once: a repeat of a kept one (the second pass re-reading it) is not a drop
+  const seen = new Set((m.kept || []).map(k => k.text)), dropped = (m.dropped || []).filter(x => { const k = x.text + "|" + x.why; return seen.has(x.text) || seen.has(k) ? false : seen.add(k); });
+  $("#stages").innerHTML = `
+    <div class="robj fixed"><div class="hd"><span class="st">«fixed code»</span><b>1 · parser</b></div><div class="cp">
+      <span>${words.length} rule${words.length === 1 ? "" : "s"} from phrases in the instruction.</span>
+      ${list(words.map(r => line("+", "add", r.text, r.rule, from(r.phrase) + (r.ai_added ? `<span class="from"><b>AI added:</b> ${esc(r.ai_added.join(", "))} (not named by you)</span>` : "")))) || `<span class="note">No phrase it knows; the model reads the rest.</span>`}</div></div>
+    <div class="robj ${modelOff ? "" : "llm"}" ${modelOff ? 'style="opacity:.6;border-style:dashed"' : ""}><div class="hd"><span class="st">«LLM · ${esc((m.model || m.provider || "model").split("/").pop())} · reviewed by fixed code»</span><b>2 · model suggestions</b></div>
+      <div class="cp">${modelOff ? `<span>Not used: ${esc(m.last_error)}.</span>` : `<span>${(m.kept || []).length + dropped.length} suggested · ${(m.kept || []).length} kept · ${dropped.length} dropped${m.proposed > (m.kept || []).length + dropped.length ? ` <span class="note">(${m.proposed - (m.kept || []).length - dropped.length} repeats from the second reading not shown)</span>` : ""}</span>
+        ${list([...(m.kept || []).map(k => line("✓", "ok", k.text, k.rule, from(k.quote) + (k.extends ? `<span class="from">extends: ${esc(k.extends)}</span>` : "") + (k.ai_added ? `<span class="from"><b>AI added:</b> ${esc(k.ai_added.join(", "))} (not named by you)</span>` : ""))),
+                ...dropped.map(x => line("✕", "no", x.text, null, `<span class="from">${esc(x.why)}</span>`))])}`}
+        <span class="note">It sees only the words, never a purchase. Kept only if its words are the customer's, it adds something and it contradicts nothing.</span></div></div>
+    <div class="robj fixed"><div class="hd"><span class="st">«fixed code»</span><b>3 · always-on checks added</b></div><div class="cp">
+      <span>${always.length} safety checks, the same in every mandate.</span>
+      ${list(always.map(r => line("+", "add", r.text, r.rule)))}</div></div>
+    <div class="robj"><div class="hd"><span class="st">«for the customer to confirm»</span><b>4 · the draft</b></div><div class="cp">
+      <span>When unsure: <b>${esc(d.uncertainty_policy)}</b></span>
+      ${d.open_questions.map(q => `<span style="color:var(--ask)">? ${esc(q)}</span>`).join("")}
+      <details><summary>How the words were read (${d.guidance.length})</summary><ul class="note" style="margin:4px 0 0;padding-left:16px">${d.guidance.map(g => `<li>${esc(g)}</li>`).join("")}</ul></details></div></div>`;
+  $("#rules-h").textContent = `Rules · ${d.rules.length} (all must hold)`;
+  const grp = (t, rs) => rs.length ? `<div><span class="colh">${t} · ${rs.length}</span><div class="rgrid" style="margin-top:6px">${rs.map(box).join("")}</div></div>` : "";
+  $("#rules").innerHTML = grp("From your words", words) + grp("Suggested by the model", ai) + `<details><summary>${always.length} always-on checks</summary><div class="rgrid" style="margin-top:6px">${always.map(box).join("")}</div></details>`;
+  $("#bt").innerHTML = `<p style="margin:0">${esc(d.backtest.summary)}</p>${d.backtest.caveat ? `<span class="note">${esc(d.backtest.caveat)}</span>` : ""}`;
+}
+(async () => {
+  const j = await api("/api/examples"); EX = j.examples;
+  $("#ex").innerHTML = EX.map(e => `<option value="${e.scenario_id}">${esc(e.persona)} · ${esc(e.story)}</option>`).join("");
+  $("#ex").onchange = () => { $("#instr").value = EX.find(e => e.scenario_id === $("#ex").value).instruction; go(); };
+  $("#model").checked = j.model.available; $("#model").disabled = !j.model.available;
+  if(!j.model.available) $("#model-l").textContent = "Ask the model for extra rules (no model configured)";
+  $("#go").onclick = go;
+  $("#ex").value = "SCEN0002"; $("#instr").value = EX.find(e => e.scenario_id === "SCEN0002").instruction; go();
+})();
+</script>
+</body>
+</html>

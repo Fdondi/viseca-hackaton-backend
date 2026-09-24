@@ -149,17 +149,20 @@ class CompileIn(BaseModel):
 def _parse(text: str, use_model: bool):
     """Customer's words → Draft (rules + notes), optionally with grounded model suggestions."""
     draft = COMPILER.compile(text)
-    for rule, words in _shop_rules(text):
-        draft.add(rule, "your rules", words)
     model = None
     if use_model and USE_LLM:
-        before = len(draft.hard_rules)
         llm.augment(draft, sorted(PACK.item_categories))
         rev = llm.STATUS.get("last_review") or {"proposed": 0, "dropped": []}
         model = {**{k: llm.STATUS[k] for k in ("provider", "model", "last_error", "last_latency_s")},
-                 "proposed": rev["proposed"], "kept": len(draft.hard_rules) - before,
+                 "proposed": rev["proposed"], "kept": len(rev.get("kept_view", [])),
+                 "suggestions": [{"result": "kept", "text": _describe(k["rule"]), "rule": k["rule"], "quote": k["quote"],
+                                  **({"ai_added": k["ai_added"]} if k.get("ai_added") else {})}
+                                 for k in rev.get("kept_view", [])]
+                                + [{"result": "dropped", "text": describe(d["rule"]) if d["rule"].get("value") not in (None, "", [])
+                                    else f"A rule on '{d['rule']['field']}' with no value", "rule": d["rule"],
+                                    "quote": d.get("quote"), "why": d["why"]} for d in rev["dropped"]],
                  "dropped": [{"text": describe(d["rule"]), "why": d["why"]} for d in rev["dropped"]]}
-    refresh_gaps(draft, llm.grounded)   # gaps are judged on the final rules: ours, shop names and the model's
+    refresh_gaps(draft)   # gaps are judged on the final rules: ours and the model's
     return draft, model
 
 
@@ -174,29 +177,6 @@ def _not_understood(text: str, draft, model, reasons: list[str] | None = None) -
         "unparsed": [g["text"] for g in draft.gaps if g["kind"] == "unparsed"],
         "model": model,
     })
-
-
-RX_SHOP_NOT = re.compile(r"\b(?:no|never|not|don't|do not|avoid|block|stop|exclude|except)\b", re.I)
-RX_SHOP_ONLY = re.compile(r"\bonly\b", re.I)
-
-
-def _shop_rules(text: str) -> list[tuple[dict, str]]:
-    """'No orders from Neighbour Pantry' / 'only from Alpine Basket' → merchant-ID rules.
-    Exact catalogue names only; the rule stores the ID, so a lookalike name never matches."""
-    found: dict[str, list[str]] = {"not_in": [], "in": []}
-    words: dict[str, list[str]] = {"not_in": [], "in": []}
-    for mid, m in sorted(PACK.merchants.items()):
-        hit = re.search(rf"\b{re.escape(m['merchant_name'])}\b", text, re.I)
-        if not hit:
-            continue
-        clause = re.split(r"[.;!?]", text[:hit.start()])[-1]
-        op = "not_in" if RX_SHOP_NOT.search(clause) else "in" if RX_SHOP_ONLY.search(clause) else None
-        if op:
-            found[op].append(mid)
-            said = (clause + hit.group(0)).strip()
-            words[op] = [w for w in words[op] if not said.startswith(w)] + [said]
-    return [({"field": "authorization.merchant.merchant_id", "operator": op, "value": ids}, "; ".join(words[op]))
-            for op, ids in found.items() if ids]
 
 
 def _describe(rule: dict) -> str:
@@ -229,7 +209,8 @@ def compile_mandate(body: CompileIn):
         "guidance": d["guidance"],
         "open_questions": d["open_questions"],
         "gaps": d["gaps"],
-        "rules_explained": [{"rule": n["rule"], "text": _describe(n["rule"]), "source": n["tier"], "from_words": n["source"]}
+        "rules_explained": [{"rule": n["rule"], "text": _describe(n["rule"]), "source": n["tier"], "from_words": n["source"],
+                             **({"ai_added": n["ai_added"]} if n.get("ai_added") else {})}
                             for n in d["notes"]],
         "safety_net": "Also always on: manipulative shop text, lookalike shops, duplicates, split orders, implausible "
                       "prices and signs someone else is driving the session make a purchase uncertain.",

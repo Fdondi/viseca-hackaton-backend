@@ -332,6 +332,32 @@ class Compiler:
                               "or a country the card has never bought from. Any of these pauses the purchase for you.")
             mark(m.start())
 
+        # 5b. the customer's own names and words, by grammar (the model covers everything else)
+        for rule, words, at in _named_shops(text):
+            d.add(rule, "your rules", words)
+            mark(at)
+        # a kind of shop in the customer's words replaces a shop-type code read from the same words
+        kinds = [str(v).lower() for r in d.hard_rules if r["field"] == "derived.shop_named" for v in r["value"]]
+        for n in [n for n in d.notes if n["rule"]["field"] == "authorization.merchant.merchant_mcc"]:
+            if any(n["source"].lower() in k or k in n["source"].lower() for k in kinds):
+                d.notes.remove(n)
+                d.hard_rules = [h for h in d.hard_rules if h is not n["rule"]]
+        m = RX_ONLY_BUY.search(text)
+        if m and not any(r["field"] in ("items.item_id", "items.item_category") for r in d.hard_rules):
+            what = re.sub(r"\s+(?:every|each|per|once|twice|for|at|from|in|up to|under)\b.*$", "", m.group(1).strip(), flags=re.I)
+            if what and len(what.split()) <= 5:
+                d.add({"field": "derived.product_is", "operator": "in", "value": [what]}, "your rules", m.group(0))
+                mark(m.start())
+        m = RX_HOW_OFTEN.search(low)
+        if m:
+            count = {"once": 1, "twice": 2}.get(m.group("count") or "", None) or int(m.group("count") or 0) or 1
+            unit = (m.group("unit") or re.sub(r"ly$", "", m.group("adverb") or "week")).replace("dai", "day")
+            n = {"other": 2, "second": 2}.get(m.group("n") or "", None) or int(m.group("n") or 1)
+            days = UNIT_DAYS.get(unit, 7) * n
+            d.add({"field": "derived.period_order_count", "operator": "<=", "value": count, "period_days": days},
+                  "your rules", m.group(0))
+            mark(m.start())
+
         # 6. tier-1 defaults
         wants_quasi = any(c in cats for c in ("gift_card",)) or any(i["item_category"] == "gift_card" for i in items)
         wants_recur = any(c in cats for c in ("subscriptions", "membership")) or any(i["item_category"] in ("subscriptions", "membership") for i in items)
@@ -349,14 +375,57 @@ class Compiler:
         return d
 
 
+NAME = r"[A-Z][\w&'’-]*(?:\s+[A-Z][\w&'’-]*)*"
+RX_SHOPS = re.compile(rf"\b(?:from|at)\s+(?P<names>{NAME}(?:\s*(?:,|\bor\b|\band\b)\s*{NAME})*)")
+RX_NEGATION = re.compile(r"\b(?:no|never|not|don't|do not|avoid|except|nothing)\b", re.I)
+RX_ONLY_BUY = re.compile(r"\bonly\s+(?:buy|order|get|purchase)\s+(?!from\b|at\b|when\b|if\b|what\b|the\b)([^.;,]+)", re.I)
+RX_HOW_OFTEN = re.compile(r"\b(?:(?P<count>once|twice|\d+)\s+(?:times?\s+)?(?:a|per|every|each|in)\s+|every\s+|each\s+)"
+                          r"(?:(?P<n>\d+|other|second)\s+)?(?P<unit>day|week|fortnight|month)s?\b"
+                          r"|\b(?P<adverb>daily|weekly|fortnightly|monthly)\b")
+UNIT_DAYS = {"day": 1, "week": 7, "fortnight": 14, "month": 30}
+
+
+RX_ONLY_FROM = re.compile(r"\b(?:only|never|not|no|don't|do not)\b[^.;:!?,]{0,30}?\b(?:from|at(?!\s+(?:most|least)\b))\s+"
+                          r"(?P<list>[^.;:!?]+)", re.I)
+RX_NOT_A_KIND = re.compile(r"^(?:a|an|the|any|some|this|that)\b|\b(?:i|we|me|my|our|us|you)\b|\bbefore\b", re.I)
+
+
+def _named_shops(text: str) -> list[tuple[dict, str, int]]:
+    """'only from Coop or farmer shops' / 'never from Aldi': shop names as written (capitalised) and, after
+    'only/never … from', kinds of shop in the customer's words. No list of shops. Phrases about the customer
+    ('shops I use regularly', 'a seller I have bought from') are left to the familiarity rules."""
+    out, seen = [], set()
+    for m in RX_ONLY_FROM.finditer(text):
+        parts = [p.strip() for p in re.split(r"\s*(?:,|\bor\b|\band\b)\s*", m.group("list")) if p.strip()]
+        values = []
+        for p in parts:           # the shops come first; the list ends at the first part that isn't one
+            if RX_NOT_A_KIND.search(p) or len(p.split()) > 4 or re.search(r"\d", p):
+                break
+            values.append(p)
+        if not values:
+            continue     # about the customer ('shops I use regularly'): the familiarity rules read it
+        clause = text[max(0, m.start() - 40):m.start("list")]
+        op = "not_in" if RX_NEGATION.search(clause.split("only")[-1]) or re.match(r"(?:never|not|no|don't|do not)\b", m.group(0), re.I) else "in"
+        out.append(({"field": "derived.shop_named", "operator": op, "value": values}, m.group(0).strip(), m.start()))
+        seen.add(m.start("list"))
+    for m in RX_SHOPS.finditer(text):      # capitalised names elsewhere ('buy it from Galaxus')
+        if any(abs(m.start("names") - k) < 2 for k in seen):
+            continue
+        names = [n.strip() for n in re.split(r"\s*(?:,|\bor\b|\band\b)\s*", m.group("names")) if n.strip()]
+        clause = re.split(r"[.;!?]", text[:m.start()])[-1]
+        op = "not_in" if RX_NEGATION.search(clause) else "in"
+        out.append(({"field": "derived.shop_named", "operator": op, "value": names}, m.group(0), m.start()))
+    return out
+
+
 SPEND_FIELDS = {"authorization.billing_amount_chf", "derived.period_spend_chf"}
-SCOPE_FIELDS = {"items.item_id", "items.item_category"}
+SCOPE_FIELDS = {"items.item_id", "items.item_category", "derived.product_is"}
 
 
-def refresh_gaps(d: Draft, grounded=None) -> list[dict]:
+def refresh_gaps(d: Draft) -> list[dict]:
     """What the customer's words didn't give us, computed on the FINAL draft: call it again after anything
-    else adds rules (shop names, the model), so a question never contradicts a rule that was found.
-    `grounded(sentence, rule)` tells whether a model rule comes from that sentence."""
+    else adds rules (the model), so a question never contradicts a rule that was found. A sentence counts as
+    used when any rule's source words (ours, or the model's quote) are in it."""
     stale = {g["question"] for g in d.gaps}
     d.open_questions = [q for q in d.open_questions if q not in stale]
     own = d.own_notes()
@@ -373,8 +442,6 @@ def refresh_gaps(d: Draft, grounded=None) -> list[dict]:
         low = sentence.lower()
         phrases = [p for n in own if n["source"] not in ("default", "llm") for p in n["source"].lower().split("; ")]
         if any(p and p in low for p in phrases):
-            continue
-        if grounded and any(grounded(sentence, n["rule"]) for n in own if n["source"] == "llm"):
             continue
         gaps.append({"kind": "unparsed", "text": sentence.strip(),
                      "question": f"We did not turn this into a check: \"{sentence.strip()}\". Is anything here important?"})

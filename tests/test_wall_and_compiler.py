@@ -69,9 +69,9 @@ def test_ai_suggestions_are_reviewed_before_the_customer_sees_them():
     proposed = [{"field": "items.item_category", "operator": "not_in", "value": ["electronics"]},    # contradicts the monitor
                 {"field": "authorization.billing_amount_chf", "operator": "<=", "value": 400},     # duplicate (400 vs 400.0)
                 {"field": "derived.period_spend_chf", "operator": "<=", "value": 900, "period_days": 7, "scope": "period"},  # invented amount
-                {"field": "derived.quasi_cash_lines", "operator": "=", "value": 0}]                # genuinely new
+                {"field": "derived.quasi_cash_lines", "operator": "=", "value": 0, "_quote": "no gift vouchers"}]  # genuinely new
     kept, dropped = review("Buy the 27-inch monitor for CHF 400 or less, no gift vouchers.", existing, proposed)
-    assert kept == [proposed[3]]
+    assert kept == [proposed[3]] and kept[0]["_quote"] == "no gift vouchers"
     assert [d["why"] for d in dropped] == ["contradicts what you asked to buy", "already covered by a rule from your words",
                                            "nothing in your words asks for this"]
 
@@ -111,7 +111,8 @@ def test_ai_suggestions_must_be_grounded_in_the_customer_words():
     text = "Get me a pack of printer paper, max 50 francs, only from shops I know. Only Swiss sellers."
     proposed = [{"field": "authorization.merchant.merchant_mcc", "operator": "in", "value": ["5941"]},   # invented
                 {"field": "authorization.order_returnable", "operator": "=", "value": "true"},          # invented
-                {"field": "authorization.merchant.merchant_country", "operator": "in", "value": ["CH"]}]  # "Swiss"
+                {"field": "authorization.merchant.merchant_country", "operator": "in", "value": ["CH"],
+                 "_quote": "Only Swiss sellers"}]                                                        # quotes the words
     kept, dropped = review(text, [], proposed)
     assert kept == [proposed[2]] and {d["why"] for d in dropped} == {"nothing in your words asks for this"}
 
@@ -178,3 +179,103 @@ def test_screen_size_already_in_the_chosen_product_says_so():
     assert [d["why"] for d in dropped] == ["already part of the product you asked for (27-inch computer monitor)",
                                           "not a clothing or shoe size, which is what this check compares", "empty value"]
     assert _dropped_text(proposed[2]) == "A rule on 'authorization.merchant.merchant_country' with no value given"
+
+
+def test_ai_suggestions_are_grounded_by_quote_not_keyword_lists():
+    from leash.llm import review
+    text = "Buy milk every week. Only buy lactose-free milk. Only buy from Migros or Coop."
+    proposed = [{"field": "items.item_category", "operator": "in", "value": ["groceries"], "_quote": "Buy milk"},
+                {"field": "derived.shop_named", "operator": "in", "value": ["Migros", "Coop"],
+                 "_quote": "Only buy from Migros or Coop"},
+                {"field": "derived.product_is", "operator": "in", "value": ["lactose-free milk"],
+                 "_quote": "Only buy lactose-free milk"},
+                {"field": "derived.shop_named", "operator": "in", "value": ["Denner"], "_quote": "Migros or Coop"},
+                {"field": "authorization.merchant.merchant_country", "operator": "in", "value": ["CH"],
+                 "_quote": "Migros and Coop are Swiss"},                                   # words the customer never wrote
+                {"field": "authorization.merchant.merchant_mcc", "operator": "in", "value": ["5411"]}]   # no quote
+    kept, dropped = review(text, [], proposed)
+    assert kept == proposed[:3]
+    assert [d["why"] for d in dropped] == ["'Denner' is not in your words", "nothing in your words asks for this",
+                                          "nothing in your words asks for this"]
+
+
+def test_shops_can_be_names_or_kinds_in_the_customer_words(pack):
+    from leash.compiler import Compiler
+    shops = lambda t: [(n["rule"]["operator"], n["rule"]["value"]) for n in Compiler(pack).compile(t).own_notes()
+                       if n["rule"]["field"] == "derived.shop_named"]
+    assert shops("Only from Coop or farmer shops.") == [("in", ["Coop", "farmer shops"])]
+    assert shops("Never order from Aldi or discount stores.") == [("not_in", ["Aldi", "discount stores"])]
+    assert shops("Groceries from a shop I use regularly.") == []          # about the customer: familiarity rule
+    assert shops("Groceries only, at most CHF 40 per order, and only from Coop or farmer shops.") == [
+        ("in", ["Coop", "farmer shops"])]                                      # 'at most' is not a shop
+
+
+def test_a_fuller_list_from_the_model_extends_ours():
+    from leash.compiler import Draft
+    from leash.llm import review
+    ours = {"field": "derived.shop_named", "operator": "in", "value": ["Coop"]}
+    proposed = [{"field": "derived.shop_named", "operator": "in", "value": ["Coop", "farmer shops"],
+                 "_quote": "Only from Coop or farmer shops"}]
+    kept, dropped = review("Only from Coop or farmer shops.", [ours], proposed)
+    assert kept and kept[0]["_extends"] is ours and not dropped
+
+
+def test_quotes_may_paraphrase_a_little_but_not_invent():
+    from leash.llm import review
+    text = "Only reorder milk after at least ten days have passed since the last order."
+    ok = {"field": "derived.period_order_count", "operator": "<=", "value": 1, "period_days": 10, "_quote": "every ten days"}
+    made_up = {"field": "authorization.merchant.merchant_country", "operator": "in", "value": ["CH"],
+               "_quote": "only Swiss shops"}
+    noop = {"field": "derived.basket_units", "operator": ">=", "value": 1, "_quote": "reorder milk"}
+    kept, dropped = review(text, [], [ok, made_up, noop])
+    assert kept == [ok] and [d["why"] for d in dropped] == ["nothing in your words asks for this",
+                                                            "always true, so it adds nothing"]
+
+
+def test_shop_list_stops_at_the_first_part_that_is_not_a_shop(pack):
+    from leash.compiler import Compiler
+    d = Compiler(pack).compile("Buy the newspaper every week, only from kiosks or book shops, at most CHF 12 per order.")
+    fields = {r["field"]: r["value"] for r in d.hard_rules}
+    assert fields["derived.shop_named"] == ["kiosks", "book shops"]
+    assert "authorization.merchant.merchant_mcc" not in fields        # no narrower code contradicting 'kiosks'
+    assert fields["authorization.billing_amount_chf"] == 12.0
+    d = Compiler(pack).compile("Buy only from a specialist sports retailer.")    # no kinds list: the code stays
+    assert any(r["field"] == "authorization.merchant.merchant_mcc" for r in d.hard_rules)
+
+
+def test_amounts_written_in_words_count_as_stated():
+    from leash.llm import review
+    r = {"field": "authorization.billing_amount_chf", "operator": "<=", "value": 12, "_quote": "at most twelve francs"}
+    kept, dropped = review("Newspapers, at most twelve francs per order.", [], [r])
+    assert kept == [r] and not dropped
+
+
+def test_second_reading_extends_instead_of_adding_a_second_list(monkeypatch, pack):
+    from leash import llm
+    from leash.compiler import Compiler
+    d = Compiler(pack).compile("Only buy from Migros or Denner.")
+    monkeypatch.setattr(llm, "available", lambda: True)
+    monkeypatch.setattr(llm, "propose_rules", lambda *a, **k: [])
+    monkeypatch.setattr(llm, "propose_missing", lambda *a, **k: [
+        {"field": "derived.shop_named", "operator": "in", "value": ["Migros", "Denner"],
+         "_quote": "Only buy from Migros or Denner"}])
+    for n in d.notes:                     # pretend our parser only read 'Migros'
+        if n["rule"]["field"] == "derived.shop_named":
+            n["rule"]["value"] = ["Migros"]
+    llm.augment(d, sorted(pack.item_categories))
+    lists = [r["value"] for r in d.hard_rules if r["field"] == "derived.shop_named"]
+    assert lists == [["Migros", "Denner"]]
+    assert llm.STATUS["last_review"]["kept_view"][0]["second_pass"]
+
+
+def test_ai_may_name_related_shops_next_to_one_the_customer_named():
+    from leash.llm import review
+    text = "Only buy from Migros or a shop in the same chain."
+    chain = {"field": "derived.shop_named", "operator": "in", "value": ["Migros", "Denner", "Migrolino"],
+             "_quote": "Only buy from Migros or a shop in the same chain"}
+    invented = {"field": "derived.shop_named", "operator": "in", "value": ["Denner", "Migrolino"],
+                "_quote": "a shop in the same chain"}                        # no shop the customer named
+    kept, dropped = review(text, [], [chain])
+    assert kept == [chain] and kept[0]["_ai_added"] == ["Denner", "Migrolino"]
+    kept, dropped = review(text, [], [invented])
+    assert not kept and dropped[0]["why"] == "'Denner' is not in your words"

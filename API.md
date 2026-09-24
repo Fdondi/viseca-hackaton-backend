@@ -44,7 +44,7 @@ This service is ours. It does **not** call the hosted challenge API.
 | Format | JSON in and out. Send `Content-Type: application/json`. |
 | Authentication | Off by default. If the server was started with `LEASH_API_KEY=<key>`, send `Authorization: Bearer <key>` on every call except `/v1/health`; otherwise you get `401`. |
 | CORS | Browsers may call from any origin. To restrict, start the server with `LEASH_API_CORS=http://localhost:5173,https://app.example`. |
-| Model | When `APERTUS_KEY` is set (in `leash/.env`), Apertus helps **parse the customer's words into rules**. It never decides a purchase. With no model, or if the model is down, parsing still works with our own rules, just with fewer suggestions. |
+| Model | When `APERTUS_KEY` is set (in `leash/.env`), Apertus (1) **turns the customer's words into rules** and (2) **judges shop names and product descriptions** that plain word matching can't decide (e.g. "Coop Pronto" for "Coop", "laktosefrei" for lactose-free). It never approves on its own say-so: it must point at real words, and if it's down, slow or unsure the purchase goes to the customer. See [How words become rules](#how-words-become-rules). |
 | Persistence | Everything lives in memory. **Restarting the server forgets all mandates and decisions**, so be ready for `404` on old IDs. |
 | Customers | The 20 customers (their cards and purchase history) come from the data pack. Use `customer_id` values such as `CU0001`. The demo's scenarios are private and are not exposed. |
 | Shops | A shop is identified by `merchant_id` (for example `ME0001`), never by name. That is how lookalike shops get caught. |
@@ -334,7 +334,7 @@ Afterwards, every `POST /v1/decisions` on it returns `decline` (`reason_codes: [
 ### Decisions
 
 #### `POST /v1/decisions`: decide a purchase
-Send the purchase the agent proposes and get the decision back straight away (a few milliseconds; no model involved).
+Send the purchase the agent proposes and get the decision back: a few milliseconds, or 1–3 s when a shop name or product description needs the model's judgment (`derived.shop_named`, `derived.product_is`; results are cached).
 
 Request:
 | Field | Type | Required | Default | Meaning |
@@ -603,6 +603,50 @@ Created whenever a shop is flagged, so the customer is always told (even if the 
 
 ---
 
+## How words become rules
+
+`/v1/mandates/compile` and `/v1/mandates/{id}/rules/parse` run three steps. Errors and gaps are judged only on the **final** result:
+
+The model is **always** consulted; our own patterns are only a fallback for when it's down, never the only reader.
+
+1. **Our parser** (fixed code, grammar only: no list of shops or products). It reads amounts ("at most CHF 50", "CHF 300 in any 7 days"), shops after *only/never … from* as names ("Coop") or kinds of shop ("farmer shops"), "only buy X" ("only buy lactose-free milk"), how often ("every week", "every 2 weeks", "every ten days", "every other week", "3 times per fortnight"), sizes, return windows, catalogue items and common categories.
+2. **The model** (Apertus) proposes rules from the whole instruction. For **every** rule it returns `quote`: the words it comes from.
+3. **Coverage pass:** the model gets the instruction and all rules found so far (ours and its own, in plain language) and lists only what is still **missing**, in any wording ("after at least ten days", "one order in any three weeks").
+4. **Review** (fixed code) keeps a model rule only if it passes all of these:
+   - At least two thirds of its quote's meaningful words are the customer's (numbers in words and digits alike, so a light paraphrase like "every ten days" passes).
+   - Every shop name, kind of shop or product word it introduces comes from those words, so it can't invent one.
+   - It isn't always true (e.g. "at least 1 item").
+   - It doesn't contradict, duplicate or loosen an existing rule.
+
+   Shops the customer points at without naming them ("Migros or a shop in the same chain") are named by the AI in two focused questions: which entry points at which named shop, then which store brands that group operates. The result is "Migros, Migrolino, Denner, …". Names the customer didn't write are allowed only next to one they did, at most 8, and are listed in `ai_added` (in `rules_explained` and `model.suggestions`), so the customer can remove any. The AI's knowledge is rough (it also listed M-Budget, a product line).
+
+   A fuller list extends ours: our "Coop" plus the model's "Coop, farmer shops" becomes one rule. If the model reads the same words differently from our parser, the reason says so ("the AI read your words differently (…); we kept …"). Kept model rules are labelled `"suggested by AI — please review"`, with the quote as `from_words`.
+
+Example: `"Buy milk every week. Only buy lactose-free milk. Only buy from Migros or Coop."` →
+- "Only from: Migros, Coop" (`derived.shop_named`)
+- "Every item is lactose-free milk" (`derived.product_is`)
+- "At most 1 order in any 7 days" (`derived.period_order_count`)
+- plus model suggestions "groceries" and "country CH" for review
+- `gaps`: `spending_limit`
+
+How those checks were decided on real purchases (Apertus):
+| Shop · product | Decision | Why |
+|---|---|---|
+| Migros · "Lactose-free milk 1 l" | approve | words match |
+| Coop Pronto · "Milch" [laktosefrei] | approve | shop by name; AI evidence: lactose-free = 'laktosefrei', milk = 'Milch' |
+| Coop · "Lait" [sans lactose] | approve | AI evidence: 'sans lactose', 'Lait' |
+| "Milk" [no lactose] · "Laktosefreie Milch" | approve | AI evidence: 'no lactose' / 'laktosefrei' (a short ending like 'Laktosefrei**e**' counts; 'Buttermilk' doesn't show 'milk') |
+| "Milk" [low lactose] · [contains lactose] | step_up | a weaker claim isn't evidence for 'lactose-free' |
+| Migros · "Whole milk 1 l" | step_up | nothing shows 'lactose-free' |
+| Coop · "Oat drink" [naturally lactose free] | step_up | nothing shows 'milk' |
+| Aldi Suisse · lactose-free milk | decline | AI: none of Migros, Coop |
+| Mlgros · lactose-free milk | step_up | near-miss spelling of Migros: possible imitation |
+| rule "Only from Coop or farmer shops": Hofladen Bühler · Ferme des Trois Chênes | approve | AI: a farm shop (German / French name) |
+| same rule: Farmer's Market Café (restaurant) · Lidl | decline | AI: a restaurant / a supermarket chain |
+| second order in the same week | step_up | `derived.period_order_count` |
+
+---
+
 ## 5. Rule fields the engine understands
 
 Named fields:
@@ -619,13 +663,18 @@ Named fields:
 | `derived.merchant_purchases_ever` | `>= 1` → "Only shops you have bought from before on this card." |
 | `extracted.size` | `= "43"` → "The size is 43 (as stated by the shop; if not stated, we ask you)." |
 | `extracted.return_days` | `>= 14` → "The order can be returned within 14 days or more (if not stated, we ask you)." |
-| `authorization.merchant.merchant_id` | `not_in ["ME0002"]` → "Never buy from: Neighbour Pantry (ME0002)."; `in [...]` → "Only buy from: …" |
+| `authorization.merchant.merchant_id` | `not_in ["ME0002"]` → "Never buy from: Neighbour Pantry (ME0002)."; `in [...]` → "Only buy from: …" (by ID: used when the customer blocks a shop) |
+| `derived.shop_named` | `in ["Coop", "farmer shops"]` → "Only from: Coop, farmer shops." Values are shop **names** (capitalised, as written) and/or **kinds of shop** in the customer's words. No list of shops. Matches if the value's words appear in the shop's name ("Coop Pronto"); a near-miss spelling of a name ("Mlgros") → uncertain (possible imitation); otherwise the AI judges from the shop's name, category and type code, in any language (Ferme, Hof, Bauernhof are farms; a café named "Farmer's Market" is a restaurant). AI says no → decline; AI not sure or down → uncertain (ask). `not_in` for shops to avoid. |
+| `derived.product_is` | `in ["lactose-free milk"]` → "Every item is lactose-free milk." Every basket line's name or description must show **every part** ("lactose-free", "milk"): by words, or by AI evidence (words really in the text, any language). Not shown → uncertain (ask), never a decline. `not_in` for products to avoid. |
+| `derived.period_order_count` | `<= 1`, `period_days: 7` → "At most 1 order in any 7 days." Any wording of a frequency ("every 2 weeks" → 14 days, "one order in any three weeks" → 21). More → uncertain (ask). |
 
 Generic fields:
 - `authorization.<field>`: any purchase field, e.g. `authorization.currency`, `authorization.order_returnable`, `authorization.channel`
 - `authorization.merchant.<field>`: e.g. `authorization.merchant.merchant_country` `in ["CH"]`
 - `items.<attr>`, applied to **every** basket line: `item_id`, `item_name`, `item_category`, `quantity`, `unit_price`, `currency`
 - `extracted.<fact>`, read from shop text: `size`, `return_days`, `final_sale`, `recurring_billing`, `warranty_months`, `quasi_cash`, `addon`
+
+The price check learns from the customer: when they approve a purchase that was waiting for them, each item's unit price is remembered for that customer. A later price between 20% below and 25% above an approved one counts as usual ("CHF 2.00 is outside the catalogue's range (CHF 12.00–CHF 90.00) but in line with what you approved before (CHF 2.00)"). A price far from anything approved is still flagged.
 
 Always on (the safety net; you don't need to add them). Each one makes a purchase `unknown`, so it goes to the customer:
 manipulative shop text, a lookalike of a familiar shop, the same order again within 24 h, an order split to dodge a limit, a price far outside the item's usual range, a new device / burst of attempts / new country, and a re-quote of an order that tried manipulation.
@@ -641,5 +690,6 @@ Categories in the data: `GET /v1/merchants` shows shop categories. Item categori
 - **Customers come from the data pack.** Familiar shops, usual devices and typical prices all come from their history. New customers can't be created.
 - **Step-ups expire after 120 s** (`LEASH_STEP_UP_TIMEOUT` to change). Expired counts as declined.
 - **Parsing is conservative.** If no enforceable rule comes out at all, you get `422 no_rule_understood`, never a guess or an empty mandate. Sentences we couldn't use are listed (`gaps`, `unparsed`). The model can only add rules grounded in the customer's words, and each of its suggestions is marked `"suggested by AI — please review"`.
-- **Decisions never use the model.** They're deterministic, and they work the same when Apertus is down.
+- **The model judges only shop names and product descriptions**, and only when plain word matching can't decide. A product judgment must quote words that are really in the product's text, and every part of the description ("lactose-free", "milk") needs its own evidence. Shop text flagged as manipulation is never shown to the model, and a near-miss spelling of a named shop asks the customer instead. Model down or unsure → the purchase goes to the customer, never approved.
+- **The model can be wrong about who owns what.** Apertus said Migrolino and Denner aren't Migros shops (both belong to the Migros group), so those purchases were declined. The explanation shows it was the AI's judgment.
 - **AP2 is simulated.** Every key (Viseca one, the credential provider, the agent, each shop) is generated in memory when the server starts, so signatures don't survive a restart. Mandates are plain ES256 JWS with AP2 v0.2 field names, not the SD-JWT delegation chains of the full spec. External agents or shops can't register their own keys yet.

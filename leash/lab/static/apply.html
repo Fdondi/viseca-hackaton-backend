@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rule Application Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/lab.css">
+<style>
+main{grid-template-columns:minmax(300px,1fr) minmax(300px,1fr) minmax(360px,1.3fr)}
+@media (max-width:1300px){main{grid-template-columns:1fr 1fr}.result{grid-column:1 / -1}}
+@media (max-width:800px){main{grid-template-columns:1fr}}
+.rrow{display:grid;grid-template-columns:74px minmax(0,1fr) 28px;gap:5px;align-items:center}
+.rrow .fld{grid-column:1 / -1}
+.rrow input,.rrow select{padding:5px 7px;font:11.5px/1.3 var(--mono)}
+.rrow .x{padding:4px 7px}
+.rtext{font-size:11.5px;color:var(--muted);margin:-2px 0 6px}
+.line{border:1px dashed var(--rule);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px}
+.hist td{font-size:12px}
+.branch div{padding:5px 8px;border-radius:4px;border:1px solid var(--rule);color:var(--muted);font:12px/1.4 var(--mono)}
+.branch div.on{border-color:var(--accent);background:var(--accent-soft);color:var(--ink);font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <div class="row"><h1>Applying rules</h1><span class="sub">permanent + mandate rules against one purchase; everything is pre-filled and editable</span></div>
+  <nav id="nav"></nav>
+</header>
+<main>
+  <section class="panel">
+    <div class="eyebrow">Input 1 · the rules</div>
+    <div class="grid2"><label>Story<select id="sc"></select></label><label>Purchase<select id="pi"></select></label></div>
+    <div id="who" class="note"></div>
+    <div><span class="colh">Permanent rules (from the profile)</span><div id="perm" class="col" style="gap:4px;margin-top:6px"></div>
+      <div class="row" style="margin-top:6px"><button class="ghost sm" data-add="perm">+ rule</button>
+        <label style="flex-direction:row;align-items:center;gap:6px">when unsure<select id="ppol" style="width:auto"><option value="">(none)</option><option>ask</option><option>decline</option></select></label></div></div>
+    <div><span class="colh">Mandate rules (from the instruction)</span><div class="note" id="instr"></div><div id="mand" class="col" style="gap:4px;margin-top:6px"></div>
+      <div class="row" style="margin-top:6px"><button class="ghost sm" data-add="mand">+ rule</button>
+        <label style="flex-direction:row;align-items:center;gap:6px">when unsure<select id="mpol" style="width:auto"><option>ask</option><option>decline</option><option>approve</option></select></label></div></div>
+    <span class="note">The always-on safety checks are added automatically. Operators: &lt; &lt;= = != &gt; &gt;= in not_in; lists are comma-separated.</span>
+    <datalist id="fields"></datalist>
+  </section>
+  <section class="panel">
+    <div class="eyebrow">Input 2 · the purchase</div>
+    <label class="check"><input type="checkbox" id="replay" checked><span>Decide the story's earlier purchases first (the customer declines anything that asks), so repeats, split orders and period limits have history</span></label>
+    <div id="form" class="col"></div>
+  </section>
+  <section class="panel result">
+    <div class="eyebrow">Result</div>
+    <div id="out"><p class="empty">Loading…</p></div>
+  </section>
+</main>
+<script src="/lab.js"></script>
+<script>
+let SC = null, CAT = null, F = null, PERM = [], MAND = [];
+$("#nav").innerHTML = nav("apply");
+const OPS = ["<", "<=", "=", "!=", ">", ">=", "in", "not_in"];
+const vtext = v => Array.isArray(v) ? v.join(", ") : v ?? "";
+function ruleRows(list, key){
+  return list.map((r, i) => `<div><div class="rrow">
+      <input class="fld" list="fields" value="${esc(r.field)}" data-k="${key}" data-i="${i}" data-p="field" placeholder="field">
+      <select data-k="${key}" data-i="${i}" data-p="operator">${OPS.map(o => `<option ${o === r.operator ? "selected" : ""}>${o}</option>`).join("")}</select>
+      <input value="${esc(vtext(r.value))}" data-k="${key}" data-i="${i}" data-p="value">
+      <button class="ghost x" data-rm="${key}" data-i="${i}" title="remove">×</button></div>
+      <div class="rtext">${r.phrase ? `from “${esc(r.phrase)}”` : "added here"}${r.period_days ? ` · over ${r.period_days} days` : ""}</div></div>`).join("") || `<span class="note">none</span>`;
+}
+function renderRules(){ $("#perm").innerHTML = ruleRows(PERM, "perm"); $("#mand").innerHTML = ruleRows(MAND, "mand"); }
+document.addEventListener("input", ev => {
+  const el = ev.target;
+  if(el.dataset.k){ (el.dataset.k === "perm" ? PERM : MAND)[+el.dataset.i][el.dataset.p] = el.value; run(); }
+});
+document.addEventListener("change", ev => { if(["ppol", "mpol", "replay"].includes(ev.target.id)) run(); });
+document.addEventListener("click", ev => {
+  const b = ev.target.closest("button"); if(!b) return;
+  if(b.dataset.rm){ (b.dataset.rm === "perm" ? PERM : MAND).splice(+b.dataset.i, 1); renderRules(); run(); }
+  if(b.dataset.add){ (b.dataset.add === "perm" ? PERM : MAND).push({field: "", operator: "=", value: ""}); renderRules(); }
+});
+function opt(v, l, cur){ return `<option value="${esc(v)}" ${String(v) === String(cur) ? "selected" : ""}>${esc(l)}</option>`; }
+function renderForm(){
+  const f = F;
+  $("#form").innerHTML = `
+    <label>Shop<select data-f="merchant_pick">${CAT.merchants.some(m => m.merchant_id === f.merchant.merchant_id) ? "" : opt(f.merchant.merchant_id, f.merchant.merchant_name, f.merchant.merchant_id)}${CAT.merchants.map(m => opt(m.merchant_id, `${m.merchant_name} · ${m.merchant_category} · ${m.merchant_country}`, f.merchant.merchant_id)).join("")}</select></label>
+    <div class="grid3"><label>Name (shop's text)<input data-f="merchant.merchant_name" value="${esc(f.merchant.merchant_name)}"></label>
+      <label>Merchant ID<input data-f="merchant.merchant_id" value="${esc(f.merchant.merchant_id)}"></label>
+      <label>Country<input data-f="merchant.merchant_country" value="${esc(f.merchant.merchant_country)}"></label></div>
+    ${f.lines.map((l, i) => `<div class="line">
+      <label>Line ${i + 1}<select data-l="${i}" data-lk="item_id">${CAT.items.map(it => opt(it.item_id, `${it.item_name} · ${it.item_category}`, l.item_id)).join("")}</select></label>
+      <div class="grid2"><label>Quantity<input type="number" min="1" data-l="${i}" data-lk="quantity" value="${l.quantity}"></label>
+        <label>Unit price (${esc(f.currency)})<input type="number" step="0.01" data-l="${i}" data-lk="unit_price" value="${l.unit_price}"></label></div>
+      <label>Shop's product text (untrusted)<textarea class="mono" data-l="${i}" data-lk="item_details">${esc(l.item_details)}</textarea></label></div>`).join("")}
+    <div class="grid3"><label>Currency<select data-f="currency">${CAT.currencies.map(c => opt(c, c, f.currency)).join("")}</select></label>
+      <label>Delivery fee<input type="number" step="0.01" data-f="delivery_fee" value="${f.delivery_fee}"></label>
+      <label>Attempts, 10 min<input type="number" min="0" data-f="recent_attempt_count_10m" value="${f.recent_attempt_count_10m}"></label></div>
+    <div class="grid3"><label>Device<input data-f="customer_device_id" value="${esc(f.customer_device_id)}"></label>
+      <label>Fulfilment<select data-f="fulfillment_method">${["delivery", "pickup", "digital"].map(v => opt(v, v, f.fulfillment_method)).join("")}</select></label>
+      <label>Returnable<select data-f="order_returnable">${["true", "false", "unknown", "not_applicable"].map(v => opt(v, v, f.order_returnable)).join("")}</select></label></div>
+    <label>Time (simulated)<input data-f="timestamp" value="${esc(f.timestamp)}"></label>
+    <label>Order description (shop's text)<input data-f="purchase_description" value="${esc(f.purchase_description)}"></label>`;
+}
+document.addEventListener("input", ev => {
+  const el = ev.target;
+  if(el.dataset.f && el.dataset.f !== "merchant_pick"){
+    const ks = el.dataset.f.split("."); let o = F; ks.slice(0, -1).forEach(k => o = o[k]);
+    o[ks.at(-1)] = ["delivery_fee", "recent_attempt_count_10m"].includes(el.dataset.f) ? Number(el.value) : el.value; run();
+  } else if(el.dataset.l !== undefined && el.dataset.lk !== "item_id"){
+    F.lines[+el.dataset.l][el.dataset.lk] = ["quantity", "unit_price"].includes(el.dataset.lk) ? Number(el.value) : el.value; run();
+  }
+});
+document.addEventListener("change", ev => {
+  const el = ev.target;
+  if(el.dataset.f === "merchant_pick"){ F.merchant = {...CAT.merchants.find(m => m.merchant_id === el.value)}; renderForm(); run(); }
+  if(el.dataset.lk === "item_id"){ const it = CAT.items.find(x => x.item_id === el.value); Object.assign(F.lines[+el.dataset.l], it); run(); }
+});
+const run = debounce(async () => {
+  try{
+    const r = await api("/api/evaluate", {scenario_id: SC.id, index: +$("#pi").value, purchase: F, replay: $("#replay").checked,
+      permanent_rules: PERM, permanent_policy: $("#ppol").value || null, mandate_rules: MAND, policy: $("#mpol").value});
+    render(r);
+  }catch(e){ $("#out").innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
+}, 250);
+function render(r){
+  const pol = {ask: "ask the customer", decline: "decline", approve: "approve (manipulation still asks)"}[r.policy];
+  const order = {fail: 0, unknown: 1, pass: 2};
+  const checks = r.checks.slice().sort((a, b) => order[a.status] - order[b.status]);
+  $("#out").innerHTML = `
+    <div class="row"><span class="verdict ${r.decision}">${WORD[r.decision]}</span><span class="mono">${r.latency_ms} ms</span></div>
+    <div>${esc(r.message)}</div>
+    <div class="branch col" style="gap:4px">
+      <div class="${r.branch === "fail" ? "on" : ""}">${r.counts.fail} failed → decline</div>
+      <div class="${r.branch === "unknown" ? "on" : ""}">${r.counts.unknown} uncertain → ${esc(pol)} (the stricter of mandate and permanent)</div>
+      <div class="${r.branch === "pass" ? "on" : ""}">all ${r.counts.pass} passed → approve</div></div>
+    ${r.history.length ? `<details><summary>Decided first: ${r.history.length} earlier purchase(s) of the story</summary>
+      <table class="t hist"><tr><th>Purchase</th><th>Shop</th><th>CHF</th><th>Decision</th></tr>${r.history.map(h => `<tr><td class="mono">${esc(h.source)}</td><td>${esc(h.merchant)}</td><td>${Number(h.amount_chf).toFixed(2)}</td><td>${esc(h.decision)}</td></tr>`).join("")}</table></details>` : ""}
+    <div class="col" style="gap:10px">${checks.map(checkCard).join("")}</div>`;
+}
+async function loadScenario(){
+  const j = await api("/api/scenario/" + $("#sc").value);
+  SC = {id: $("#sc").value, data: j}; CAT = j.catalogue;
+  $("#fields").innerHTML = CAT.fields.map(f => `<option value="${f}">`).join("");
+  $("#who").textContent = `${j.customer.persona} · ${j.customer.customer_id} · card ${j.customer.card_id}`;
+  $("#instr").textContent = `“${j.instruction}”`;
+  PERM = j.permanent.rules.map(r => ({...r.rule, phrase: r.phrase}));
+  MAND = j.mandate.rules.map(r => ({...r.rule, phrase: r.phrase}));
+  $("#ppol").value = j.permanent.policy || ""; $("#mpol").value = j.mandate.policy;
+  $("#pi").innerHTML = j.purchases.map((p, i) => `<option value="${i}">${p.source} · ${esc(p.form.merchant.merchant_name)} · ${p.form.currency} ${(p.form.lines.reduce((a, l) => a + l.quantity * l.unit_price, 0) + (p.form.delivery_fee || 0)).toFixed(2)}</option>`).join("");
+  renderRules(); loadPurchase();
+}
+function loadPurchase(){ F = JSON.parse(JSON.stringify(SC.data.purchases[+$("#pi").value].form)); renderForm(); run(); }
+(async () => {
+  const j = await api("/api/scenarios");
+  $("#sc").innerHTML = j.scenarios.map(s => `<option value="${s.scenario_id}">${esc(s.persona)} · ${esc(s.story)}</option>`).join("");
+  $("#sc").value = "SCEN0004"; $("#sc").onchange = loadScenario; $("#pi").onchange = loadPurchase;
+  await loadScenario();
+})();
+</script>
+</body>
+</html>

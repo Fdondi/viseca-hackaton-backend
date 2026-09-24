@@ -22,6 +22,7 @@ from ..fields import SAFETY_NET as SAFETY_FIELDS
 from ..fields import describe
 from ..platform import SimPlatform
 from ..session import Session
+from .orders import generate_orders
 
 STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="Agent on a Leash: how a purchase is evaluated")
@@ -95,6 +96,9 @@ def _origin(check: dict, rule: dict | None, notes: list[dict]) -> dict:
         return {"kind": "controls", "label": "your controls"}
     if tier == "added-by-you":
         return {"kind": "added", "label": "added by you during the run"}
+    if tier == "permanent":
+        phrase = next((n["source"] for n in notes if rule is not None and n["rule"] == rule), None)
+        return {"kind": "permanent", "label": "permanent rule from the profile", "phrase": phrase}
     for n in notes:
         if rule is not None and n["rule"] == rule:
             if n["tier"] == "your rules":
@@ -171,6 +175,8 @@ def _rules(result: dict, notes: list[dict], wall: list[dict], received: list[dic
             "reads": reads, "how": lineage.how(c["field"]),
             "text_input": bool(wall_facts) or any(r in lineage.FREE_TEXT for r in reads) or "detector.injection" in reads,
             "model_fact": bool(set(wall_facts) & model_facts),
+            "ai": lineage.ai_role(c["field"], _extraction_on()),
+            "ai_used": c["provenance"] == "model" or bool(set(wall_facts) & model_facts),
             "signed": bool((c.get("extra") or {}).get("signed_permission")),
             "inputs": _inputs(c, reads, received, wall),
             "trace": c.get("trace", []),
@@ -288,7 +294,7 @@ def _ap2_diff(real: dict, base: dict, rules: list[dict]) -> dict:
 
 
 # ------------------------------------------------------------------ the rules, as structure
-DATA_KIND = {"transaction": "transaction data", "vendor": "vendor-supplied data", "viseca": "Viseca's records",
+DATA_KIND = {"transaction": "transaction data", "vendor": "shop's own text (untrusted)", "viseca": "Viseca's records",
              "customer": "your controls", "signed": "AP2 signatures"}
 
 
@@ -315,9 +321,13 @@ def _data_kinds(field: str) -> list[str]:
     return kinds
 
 
-def _rules_view() -> list[dict]:
+def _extraction_on() -> bool:
     from .. import llm
-    extraction = bool(ST.get("session") and ST["session"].use_llm and llm.extraction_enabled())
+    return bool(ST.get("session") and ST["session"].use_llm and llm.extraction_enabled())
+
+
+def _rules_view() -> list[dict]:
+    extraction = _extraction_on()
     out = []
     for n in ST.get("notes") or []:
         f = n["rule"]["field"]
@@ -327,9 +337,7 @@ def _rules_view() -> list[dict]:
             "edited": n.get("edited", False), "text": n["text"], "rule": n["rule"],
             "kind": "signal" if origin == "always" and f in {r["field"] for r in SAFETY_FIELDS} else "rule",
             "data": [DATA_KIND[k] for k in _data_kinds(f)], "how": lineage.how(f),
-            "llm_setup": origin == "llm",
-            "llm_runtime": ("fallback reads this fact from the shop text if the patterns miss it; kept only if verbatim"
-                            if extraction and f in ("extracted.size", "extracted.return_days") else None),
+            "ai": lineage.ai_role(f, extraction),   # None: no AI takes part in deciding this check
         })
     return out
 
@@ -486,7 +494,7 @@ def confirm(body: ConfirmIn):
         ST["notes"] = kept
         draft = {**ST["draft"], "hard_rules": [n["rule"] for n in kept], "uncertainty_policy": body.uncertainty_policy}
         m = s.confirm(draft, ST["scenario_id"])
-        rows = [copy.deepcopy(r) for r in s.pack.scenario_attempts(ST["scenario_id"])]
+        rows = generate_orders(s.pack, ST["scenario_id"], draft["instruction"], draft["hard_rules"])
         info = s.platform.inject_run(ST["scenario_id"], m["mandate_id"], rows)
         s.runs[info["run_id"]] = info
         ST["setup"].update(edits=edits, confirmed=True, mandate_id=m["mandate_id"], rules=len(draft["hard_rules"]),

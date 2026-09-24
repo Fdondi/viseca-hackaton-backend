@@ -34,7 +34,7 @@ REASON_CODES = {
     "new_country", "requote_of_flagged_attempt", "merchant_flagged_manipulation", "mandate_not_active",
     "card_not_active", "rule_not_understood", "rule_failed", "deadline_fallback",
     "ap2_signature_invalid", "ap2_checkout_mismatch", "ap2_replay", "ap2_expired", "ap2_constraint_violated",
-    "ap2_checkout_not_disclosed",
+    "ap2_checkout_not_disclosed", "country_outside_profile",
 }
 
 
@@ -492,17 +492,32 @@ def sig_split(ctx: Ctx, rule: dict) -> Check:
     return Check(rule["field"], PASS, "Not a split order.", "possible_split_order", tier="safety-net", provenance="run")
 
 
+APPROVED_BAND = (0.8, 1.25)   # a price this close to one the customer approved before counts as usual for them
+
+
 def sig_price(ctx: Ctx, rule: dict) -> Check:
-    odd = []
+    """Catalogue range, widened by what this customer has approved before (they decide what is usual)."""
+    odd, learned = [], []
     for l in ctx.a["items"]:
         ref = ctx.pack.items.get(l["item_id"])
         if not ref:
             continue
         unit_chf = ctx.pack.to_chf(l["unit_price"], l["currency"])
-        if unit_chf > ref["unit_price_max_chf"] or unit_chf < ref["unit_price_min_chf"]:
-            odd.append(f"'{l['item_name']}' at {chf(unit_chf)} (usual range {chf(ref['unit_price_min_chf'])}–{chf(ref['unit_price_max_chf'])})")
+        if ref["unit_price_min_chf"] <= unit_chf <= ref["unit_price_max_chf"]:
+            continue
+        rng = f"{chf(ref['unit_price_min_chf'])}–{chf(ref['unit_price_max_chf'])}"
+        mine = [p for p in ctx.controls.approved_prices.get(l["item_id"], [])
+                if p * APPROVED_BAND[0] <= unit_chf <= p * APPROVED_BAND[1]]
+        if mine:
+            learned.append(f"'{l['item_name']}' at {chf(unit_chf)} is outside the catalogue's range ({rng}) but in line "
+                           f"with what you approved before ({', '.join(chf(p) for p in mine)})")
+        else:
+            odd.append(f"'{l['item_name']}' at {chf(unit_chf)} (usual range {rng})")
     if odd:
         return Check(rule["field"], UNK, "Unusual price: " + "; ".join(odd) + ".", "price_implausible", tier="safety-net", provenance="derived")
+    if learned:
+        return Check(rule["field"], PASS, "; ".join(learned) + ".", "price_implausible",
+                     tier="safety-net", provenance="customer")
     return Check(rule["field"], PASS, "Prices are within the usual range for these items.", "price_implausible", tier="safety-net", provenance="derived")
 
 
@@ -542,6 +557,17 @@ def sig_requote(ctx: Ctx, rule: dict) -> Check:
     what = f"the {chf(prev.amount_chf)} order from {prev.timestamp:%d %b} ({prev.status})" if prev else f"an earlier attempt ({rel})"
     return Check(rule["field"], PASS, f"A re-quote of {what}; nothing suspicious about it.", "requote_of_flagged_attempt",
                  tier="safety-net", provenance="run")
+
+
+def sig_country_expected(ctx: Ctx, rule: dict) -> Check:
+    """Permanent rule from the profile: a shop outside the countries the customer shops in → ask. Never declines."""
+    cc = ctx.merchant["merchant_country"]
+    usual = rule["value"] if isinstance(rule["value"], list) else [rule["value"]]
+    if cc in usual:
+        return Check(rule["field"], PASS, f"The shop is in {cc}, where you usually shop.", "country_outside_profile",
+                     provenance="customer", actual=cc, expected=usual)
+    return Check(rule["field"], UNK, f"The shop is in {cc}; your profile says you shop in {', '.join(usual)}.",
+                 "country_outside_profile", provenance="customer", actual=cc, expected=usual)
 
 
 # ---------------------------------------------------------------- registry
@@ -626,6 +652,8 @@ FIELDS: dict[str, FieldSpec] = {
     "derived.price_plausible": FieldSpec(sig_price, lambda r: "A price far outside the usual range for that item → we ask you.", "signal"),
     "derived.session_integrity": FieldSpec(sig_session, lambda r: "A new device, a burst of attempts, or a new country (someone else may be driving) → we ask you.", "signal"),
     "derived.requote_clean": FieldSpec(sig_requote, lambda r: "A re-quote of an order that tried to manipulate us → we ask you.", "signal"),
+    "derived.shop_country_expected": FieldSpec(sig_country_expected,
+                                               lambda r: f"A shop outside {_fmt_value(r['value'])} → we ask you.", "profile"),
 }
 
 SAFETY_NET = [
@@ -886,6 +914,12 @@ def t_session(ctx, rule, c):
             "→ " + ("pass" if c.status == PASS else "uncertain")]
 
 
+def t_country_expected(ctx, rule, c):
+    cc = ctx.merchant["merchant_country"]
+    return [f"shop country = {cc} (transaction data)", f"{cc} in {_fmt_value(rule['value'])} → {_yes(c.status == PASS)}",
+            "→ " + ("pass" if c.status == PASS else "uncertain (a profile signal can ask, never decline)")]
+
+
 def t_requote(ctx, rule, c):
     rel = ctx.a.get("related_authorization_id")
     if not rel:
@@ -906,6 +940,7 @@ TRACES = {
     "security.merchant_text_clean": t_injection, "derived.not_lookalike": t_lookalike,
     "derived.not_duplicate": t_duplicate, "derived.no_split_order": t_split, "derived.price_plausible": t_price,
     "derived.session_integrity": t_session, "derived.requote_clean": t_requote,
+    "derived.shop_country_expected": t_country_expected,
 }
 
 
@@ -950,3 +985,9 @@ def evaluate(ctx: Ctx, rule: dict) -> Check:
     except (KeyError, TypeError, ValueError) as exc:
         return Check(rule["field"], UNK, f"Could not evaluate this check ({type(exc).__name__}); treated as uncertain.",
                      "rule_not_understood")
+
+
+# checks in the customer's own words (shop names, product descriptions, how often), judged flexibly
+from .judged import register as _register_judged  # noqa: E402
+
+_register_judged(FIELDS, TRACES)

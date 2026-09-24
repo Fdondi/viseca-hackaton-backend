@@ -282,6 +282,10 @@ svg#wires path{fill:none;stroke-width:1.6}
 </main>
 <div class="toast" id="toast" hidden></div>
 <script>
+// Who decides a check at purchase time: one pill. `r.ai` (from the server) says how the AI takes part; null = no AI.
+const WHO = r => r.ai
+  ? `<span class="pill llm" title="${esc(r.ai)}">AI can decide${r.ai_used ? " · did here" : ""}</span>`
+  : `<span class="pill fixed" title="${esc(r.how || "")}">no AI</span>`;
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const WORD = {approve:"Approved", step_up:"Asks you", decline:"Declined"};
@@ -368,7 +372,7 @@ function renderPhone(){
       ${editable.map(n => { const ai = n.tier.startsWith("suggested"), rm = EDITS[n.index] && EDITS[n.index].removed; return `
         <div class="ruleform ${ai?"ai":""} ${rm?"removed":""}">
           <div class="txt">${esc(n.text)}</div>
-          <div class="src">${ai ? `<span class="pill llm">AI suggestion</span> not in your words directly; kept after review` : `from your words: <q>${esc(n.source)}</q>`}</div>
+          <div class="src">${ai ? `<span class="pill llm">AI suggestion</span> from your words <q>${esc(n.source)}</q>; kept after review` : `from your words: <q>${esc(n.source)}</q>`}${n.ai_added ? `<br><b>AI added:</b> ${esc(n.ai_added.join(", "))} <span class="note">(shops you didn't name, from the AI's knowledge; remove any you don't want)</span>` : ""}</div>
           <div class="row" style="flex-wrap:nowrap"><span class="mono" style="white-space:nowrap">${esc(n.rule.field.split(".").pop())} ${esc(n.rule.operator)}</span>${input(n)}
             <button class="ghost sm" data-rm="${n.index}">${rm ? "Keep" : "Remove"}</button></div>
         </div>`; }).join("")}
@@ -518,11 +522,8 @@ function renderSetup(){
       <div class="cp">${attrs(r)}</div>
       <div class="cp"><span>${esc(r.text)}</span></div>
       <div class="cp tags">
-        <span class="pill fixed" title="${esc(r.how)}">evaluated by fixed code</span>
-        ${r.data.map(d => `<span class="pill ${d === "vendor-supplied data" ? "free" : d === "AP2 signatures" ? "signed" : "tx"}">${esc(d)}</span>`).join("")}
-        ${r.llm_setup ? `<span class="pill llm">LLM proposed it at setup</span>` : ""}
-        ${r.llm_runtime ? `<span class="pill llm" title="${esc(r.llm_runtime)}">LLM may read the fact at run time (verbatim only)</span>` : ""}
-        ${!r.llm_setup && !r.llm_runtime ? `<span class="pill tx">no LLM</span>` : ""}
+        ${WHO(r)}
+        ${r.data.map(d => `<span class="pill ${d === "shop's own text (untrusted)" ? "free" : d === "AP2 signatures" ? "signed" : "tx"}">${esc(d)}</span>`).join("")}
         ${r.kind === "signal" ? `<span class="pill unknown">can only ask, never approve</span>` : ""}
       </div></div>`;
   const group = (title, note, rs) => rs.length ? `<div class="rgroup"><div class="colh">${title} · ${rs.length}</div><p class="note" style="margin:0 0 8px">${note}</p><div class="rgrid">${rs.map(box).join("")}</div></div>` : "";
@@ -594,7 +595,7 @@ function renderFlow(){
   </div>`;
   // column 3: checks
   const originPill = o => o.kind === "llm" ? `<span class="st llm">«AI suggestion · confirmed by you»</span>` : o.kind === "words" ? `<span class="st">«your words: “${esc(o.phrase)}”»${o.edited ? " · edited" : ""}</span>` : `<span class="st">«${esc(o.label)}»</span>`;
-  const col3 = `<div class="col checks-col"><div class="colh">3 · Checks · all fixed code, no model decides</div>
+  const col3 = `<div class="col checks-col"><div class="colh">3 · Checks</div>
     ${ex.rules.map((r, i) => `<div class="chk ${r.status} ${i === SELR ? "sel" : ""} ${r.ap2_effect ? "ap2fx" : ""}" data-r="${i}">
       <div class="hd"><span>${originPill(r.origin)}</span><span class="pill ${r.status}">${r.status}</span></div>
       <div class="bd"><div class="rir">
@@ -602,7 +603,7 @@ function renderFlow(){
         <span class="lbl">Input</span><div class="ins">${r.inputs.map(i => `<span class="in ${i.class}">${i.value === "consulted" ? `<span>${esc(i.label)}</span>` : `<span class="l">${esc(i.label)}</span>${esc(fmt(i.value))}`}${i.from ? `<span class="from">from ${esc(i.from)}</span>` : ""}</span>`).join("") || `<span class="note">none</span>`}</div>
         <span class="lbl">How</span><div><ol class="trace">${(r.trace || []).map(t => `<li>${esc(t)}</li>`).join("") || `<li>${esc(r.how)}</li>`}</ol><span class="note">${esc(r.how)}</span></div>
         <span class="lbl">Result</span><div><b class="st-${r.status}">${{pass:"pass", fail:"fail", unknown:"uncertain"}[r.status]}</b> · ${esc(r.text)}</div></div>
-        <span class="row" style="gap:4px">${r.ap2_effect ? `<span class="pill signed">AP2: ${esc(r.ap2_effect)}</span>` : ""}<span class="pill fixed">fixed code</span>${r.text_input ? `<span class="pill free" title="Uses facts the shop states in its own text (return window, size, add-on wording). Read by fixed patterns into numbers or yes/no; text can't change a rule, and manipulative text makes the fact unknown. Still the shop's claim: it can be false.">relies on vendor-supplied data</span>` : r.tier === "ap2" ? "" : `<span class="pill tx" title="Decided only from data inherent in the transaction (amount, currency, merchant ID, categories, device, card history), which the shop's text can't fake.">transaction data only</span>`}${r.model_fact ? `<span class="pill llm">uses a model-extracted fact</span>` : ""}${r.provenance === "shop-signed" || r.signed ? `<span class="pill signed">signed</span>` : ""}${r.security ? `<span class="pill unknown">can only escalate</span>` : ""}</span>
+        <span class="row" style="gap:4px">${r.ap2_effect ? `<span class="pill signed">AP2: ${esc(r.ap2_effect)}</span>` : ""}${WHO(r)}${r.text_input ? `<span class="pill free" title="Uses what the shop states in its own text (return window, size, product description). Text can't change a rule, and manipulative text is never used. Still the shop's claim: it can be false.">reads the shop's own text</span>` : r.tier === "ap2" ? "" : `<span class="pill tx" title="Decided only from data inherent in the transaction (amount, currency, merchant ID, categories, device, card history), which the shop's text can't fake.">transaction data only</span>`}${r.provenance === "shop-signed" || r.signed ? `<span class="pill signed">signed</span>` : ""}${r.security ? `<span class="pill unknown">can only escalate</span>` : ""}</span>
 </div></div>`).join("")}</div>`;
   const c = ex.combine;
   const pol = {ask:"ask you", decline:"decline", approve:"approve (manipulation still asks)"}[c.policy] || c.policy;

@@ -98,6 +98,9 @@ class CustomerControls:
     uncertainty_override: dict[str, str] = field(default_factory=dict)     # mandate_id → "decline"
     audit: list[dict] = field(default_factory=list)
     cleared_merchants: dict[str, str] = field(default_factory=dict)       # merchant_id → when the customer said "not a concern"
+    approved_prices: dict[str, list[float]] = field(default_factory=dict)  # item_id → unit prices (CHF) the customer approved
+    permanent_rules: list[dict] = field(default_factory=list)              # from the profile; apply to every mandate
+    permanent_policy: str | None = None                                    # "ask" / "decline": only ever stricter
 
     def log(self, action: str, by: str, **details) -> dict:
         entry = {"at": iso(utcnow()), "action": action, "by": by, **details}

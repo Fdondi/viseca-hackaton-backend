@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Permanent Rules Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/lab.css">
+<style>
+main{grid-template-columns:minmax(300px,440px) minmax(0,1fr)}
+@media (max-width:1000px){main{grid-template-columns:1fr}}
+.field-view{font-size:13px;line-height:1.55;padding:6px 8px;border-radius:6px;background:var(--paper)}
+.noted li{margin-bottom:4px}
+.why{color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <div class="row"><h1>Permanent rules</h1><span class="sub">a customer's standing rules, read from their profile: they apply to every mandate</span></div>
+  <nav id="nav"></nav>
+</header>
+<main>
+  <section class="panel">
+    <div class="eyebrow">Input · the profile (customers.csv), editable</div>
+    <label>Customer<select id="who"></select></label>
+    <div id="bg" class="note"></div>
+    <div id="fields" class="col"></div>
+    <span class="note">Edit any field: the rules update as you type. Try “avoids gift vouchers and energy drinks”, “no subscriptions”, or “Regular trips to Spain”.</span>
+  </section>
+  <section class="col">
+    <div class="panel">
+      <div class="eyebrow">How it's read</div>
+      <p class="note" style="margin:0">Fixed patterns only, no model: a rule that applies to every purchase must trace to exact words. Only three kinds of statement become rules:
+        <b>prohibitions</b> (“avoids…”, “no…”) → hard rules; <b>where you shop and travel</b> → a shop elsewhere asks you, never declines; <b>a careful budget style</b> → ask when unsure.
+        Everything else is <b>noted, not enforced</b>, with the reason.</p>
+      <div id="marked" class="col"></div>
+    </div>
+    <div class="panel"><div class="eyebrow" id="rules-h">Permanent rules</div><div id="rules"></div></div>
+    <div class="panel"><div class="eyebrow">Noted, not enforced</div><div id="noted"></div></div>
+    <div class="panel"><div class="eyebrow">Replayed on the last 12 months of this card</div><div id="bt"></div></div>
+  </section>
+</main>
+<script src="/lab.js"></script>
+<script>
+let CUST = [], FIELDS = [], CUR = null, LAST = null;
+const LABELS = {shopping_preferences:"Shopping preferences", budget_style:"Budget style", travel_pattern:"Travel pattern", typical_spending:"Typical spending"};
+$("#nav").innerHTML = nav("permanent");
+function renderFields(){
+  $("#bg").textContent = `${CUR.persona} · ${CUR.region} · ${CUR.background}`;
+  $("#fields").innerHTML = FIELDS.map(f => f === "budget_style"
+    ? `<label>${LABELS[f]}<select data-f="${f}">${["careful","balanced","flexible","planned_high_value"].map(v => `<option ${CUR[f]===v?"selected":""}>${v}</option>`).join("")}</select></label>`
+    : `<label>${LABELS[f]}<textarea data-f="${f}">${esc(CUR[f])}</textarea></label>`).join("");
+  $("#fields").querySelectorAll("[data-f]").forEach(el => el.addEventListener("input", () => { CUR[el.dataset.f] = el.value; parse(); }));
+}
+const parse = debounce(async () => {
+  try{ LAST = await api("/api/parse", {customer_id: CUR.customer_id, profile: CUR}); render(); }catch(e){ toast(e.message); }
+}, 200);
+function render(){
+  const d = LAST;
+  // the profile, with the words that became rules (solid) and the ones only noted (dashed)
+  $("#marked").innerHTML = FIELDS.map(f => {
+    const spans = d.rules.filter(r => r.source_field === f || (f === "typical_spending" && r.rule.field === "derived.shop_country_expected"))
+      .flatMap(r => r.phrase.split(" · ").flatMap(p => p.split(", ")).map(p => ({text: p, cls: "", title: r.text})))
+      .concat(d.noted.filter(n => n.source_field === f).map(n => ({text: n.phrase, cls: "noted", title: n.why})));
+    if(f === "budget_style" && d.policy_phrase) spans.push({text: d.policy_phrase, cls: "", title: "ask when uncertain"});
+    return `<div><span class="colh">${LABELS[f]}</span><div class="field-view">${highlight(CUR[f] || "", spans) || `<span class="note">empty</span>`}</div></div>`;
+  }).join("");
+  $("#rules-h").textContent = `Permanent rules · ${d.rules.length}${d.uncertainty_policy ? " · when unsure: " + d.uncertainty_policy : ""}`;
+  $("#rules").innerHTML = (d.rules.length ? `<div class="rgrid">${d.rules.map((r, i) => `<div class="robj perm">
+      <div class="hd"><span class="st">«permanent ${r.kind} · from ${esc(LABELS[r.source_field])}: “${esc(r.phrase)}”»</span><b>permanent[${i}] : Rule</b></div>
+      <div class="cp">${ruleAttrs(r.rule)}</div>
+      <div class="cp"><span>${esc(r.text)}</span></div>
+      <div class="cp tags">${WHO(r)}${r.data.map(x => `<span class="pill ${DATA_PILL(x)}">${esc(x)}</span>`).join("")}
+        ${r.kind === "signal" ? `<span class="pill unknown">can only ask, never decline</span>` : `<span class="pill fail">fail → decline</span>`}</div></div>`).join("")}</div>`
+    : `<p class="empty">Nothing in this profile is a prohibition or names where the customer shops, so there are no permanent rules. Their mandates alone decide.</p>`)
+    + (d.uncertainty_policy ? `<div class="robj perm" style="margin-top:12px;max-width:520px"><div class="hd"><span class="st">«permanent policy · from Budget style: “${esc(d.policy_phrase)}”»</span><b>uncertainty_policy = ${esc(d.uncertainty_policy)}</b></div>
+        <div class="cp"><span>When a check is uncertain, ask the customer. Applied to every mandate, and only ever makes a mandate stricter (a mandate set to “approve when unsure” is treated as “ask”).</span></div></div>` : "");
+  const byField = FIELDS.map(f => [f, d.noted.filter(n => n.source_field === f)]).filter(([, ns]) => ns.length);
+  $("#noted").innerHTML = byField.length ? byField.map(([f, ns]) => `<div><span class="colh">${LABELS[f]}</span>
+      <ul class="noted" style="margin:4px 0 0;padding-left:18px">${ns.map(n => `<li>“${esc(n.phrase)}” <span class="why">→ ${esc(n.why)}</span></li>`).join("")}</ul></div>`).join("")
+    : `<p class="empty">Everything in the profile became a rule.</p>`;
+  $("#bt").innerHTML = `<p style="margin:0">${esc(d.backtest.summary)}</p><span class="note">History has no basket details, so only the country signal can be replayed; basket rules (vouchers, add-ons, subscriptions) can't.</span>`;
+}
+(async () => {
+  const j = await api("/api/customers"); CUST = j.customers; FIELDS = j.fields;
+  $("#who").innerHTML = CUST.map(c => `<option value="${c.customer_id}">${c.customer_id} · ${esc(c.persona)}</option>`).join("");
+  $("#who").onchange = () => { CUR = {...CUST.find(c => c.customer_id === $("#who").value)}; renderFields(); parse(); };
+  CUR = {...CUST[0]}; renderFields(); parse();
+})();
+</script>
+</body>
+</html>

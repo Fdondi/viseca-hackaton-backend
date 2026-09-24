@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Shop Text Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/lab.css">
+<style>
+main{grid-template-columns:minmax(300px,480px) minmax(0,1fr)}
+@media (max-width:1000px){main{grid-template-columns:1fr}}
+.shown{font:13px/1.6 var(--mono);padding:8px 10px;border-radius:6px;background:var(--paper);white-space:pre-wrap;overflow-wrap:anywhere}
+.verdict-box{padding:8px 12px;border-radius:8px;font-weight:600}
+.verdict-box.ok{background:var(--ok-soft);color:var(--ok)}.verdict-box.bad{background:var(--no-soft);color:var(--no)}
+.unexp span{display:inline-block;font:11px/1.3 var(--mono);padding:2px 5px;margin:2px;border-radius:4px;background:var(--paper);border:1px solid var(--rule)}
+</style>
+</head>
+<body>
+<header>
+  <div class="row"><h1>Reading the shop's text</h1><span class="sub">vendor-supplied text → typed facts, and the manipulation detector</span></div>
+  <nav id="nav"></nav>
+</header>
+<main>
+  <section class="panel">
+    <div class="eyebrow">Input · what the shop wrote (all untrusted)</div>
+    <label>Load an example<select id="ex"></select></label>
+    <div id="lines" class="col"></div>
+    <button class="ghost sm" id="add" style="align-self:flex-start">+ basket line</button>
+    <label>Order description<input id="desc" value="27-inch computer monitor"></label>
+    <label>Shop name<input id="shop" value="PixelHarbor"></label>
+    <label class="check"><input type="checkbox" id="model"><span id="model-l">Model fallback for size / return window (kept only if the value appears verbatim)</span></label>
+    <p class="note" style="margin:0">Only this code reads the shop's text. It outputs numbers, yes/no or <i>unknown</i>; nothing it reads can change a rule, an amount or the shop's identity. Detection can only make a decision stricter.</p>
+  </section>
+  <section class="col" id="out"></section>
+</main>
+<script src="/lab.js"></script>
+<script>
+let EX = null, LINES = ["27-inch IPS panel, 2-year seller warranty; returns accepted within 14 days"];
+$("#nav").innerHTML = nav("shop-text");
+const FACT_LABEL = {size:"size", return_days:"return window (days)", final_sale:"final sale", recurring_billing:"billed again later", warranty_months:"warranty (months)", quasi_cash:"voucher / store credit", addon:"add-on / protection plan"};
+function renderInputs(){
+  $("#lines").innerHTML = LINES.map((t, i) => `<label>Line ${i + 1} · product text<textarea class="mono" data-i="${i}" style="min-height:90px">${esc(t)}</textarea></label>`).join("");
+  $("#lines").querySelectorAll("textarea").forEach(el => el.addEventListener("input", () => { LINES[+el.dataset.i] = el.value; read(); }));
+}
+const read = debounce(async () => {
+  try{ render(await api("/api/read", {lines: LINES, description: $("#desc").value, shop_name: $("#shop").value, use_model: $("#model").checked})); }
+  catch(e){ toast(e.message); }
+}, 200);
+function detectorBlock(d, text){
+  const hits = d.hits.map(h => {
+    const exact = d.exact.find(x => x.rule === h.rule);
+    return `<tr><td>${esc(h.class)}</td><td>${esc(h.rule)}</td><td class="mono">${esc(exact ? exact.match : h.excerpt)}</td><td>${esc(h.via)}</td></tr>`;
+  }).join("");
+  return `<div class="verdict-box ${d.flagged ? "bad" : "ok"}">${d.flagged ? "Flagged: this text talks to the payment system" : "Clean: no instructions to the payment system"}</div>
+    ${hits ? `<table class="t"><tr><th>Class</th><th>Pattern</th><th>Matched words</th><th>How found</th></tr>${hits}</table>` : ""}
+    <div class="note">Unexplained prose: <b>${d.residual}</b> words not explained by product vocabulary (flags at ≥ ${d.residual_threshold})${d.residual_flag ? " → <b style='color:var(--no)'>flagged</b>" : ""}.
+      Payment-process vocabulary score: ${d.vocab} (flags at ≥ ${d.vocab_threshold}, if nothing else fired).</div>
+    ${d.unexplained.length ? `<details><summary>Unexplained words (${d.unexplained.length})</summary><div class="unexp">${d.unexplained.map(w => `<span>${esc(w)}</span>`).join("")}</div></details>` : ""}`;
+}
+function render(r){
+  $("#out").innerHTML = r.lines.map(l => {
+    const spans = Object.entries(l.matches).map(([k, m]) => ({text: m, cls: l.withheld ? "noted" : String(l.sources[k] || "").includes("model") ? "llm" : "", title: FACT_LABEL[k] || k}))
+      .concat(l.detector.exact.map(x => ({text: x.match, cls: "inj", title: `${x.class}: ${x.rule}`})));
+    const rows = Object.keys(FACT_LABEL).map(k => {
+      const src = String(l.sources[k] || ""), m = l.matches[k];
+      const how = l.withheld && ["size", "return_days", "final_sale", "warranty_months"].includes(k)
+        ? `<span style="color:var(--no)">withheld</span>${m ? ` (would have read “${esc(m)}”)` : ""}`
+        : m ? `fixed pattern on “${esc(m)}”` + (src.includes("model") ? " · <span class='pill llm'>model, verified verbatim</span>" : "")
+        : l.facts[k] === "unknown" ? "no wording for it → unknown" : "no wording for it → default";
+      return `<tr><td>${FACT_LABEL[k]}</td><td class="mono"><b>${esc(fmt(l.facts[k]))}</b></td><td>${how}</td></tr>`;
+    }).join("");
+    return `<div class="panel"><div class="eyebrow">Line ${l.line_no}</div>
+      <div class="shown">${highlight(l.text, spans)}</div>
+      <span class="note"><mark>solid</mark> read as a fact · <mark class="inj">red</mark> matched a manipulation pattern · <mark class="noted">dashed</mark> read but withheld${r.used_model ? " · <mark class='llm'>purple</mark> filled by the model" : ""}</span>
+      <div class="grid2" style="align-items:start;gap:16px">
+        <div><span class="colh">Typed facts (what the rules can use)</span><table class="t"><tr><th>Fact</th><th>Value</th><th>How</th></tr>${rows}</table></div>
+        <div class="col" style="gap:8px"><span class="colh">Manipulation detector</span>${detectorBlock(l.detector)}</div></div>
+      ${l.withheld ? `<p class="note" style="margin:0;color:var(--no)">Because this line talks to the payment system, its size, return window, final sale and warranty are treated as unknown: a text that tries to steer the wallet isn't trusted for facts either. The check that caught it can only make the decision stricter.</p>` : ""}</div>`;
+  }).join("") + `<div class="panel"><div class="eyebrow">Order description and shop name</div>
+      <div class="grid2" style="gap:16px;align-items:start"><div class="col" style="gap:8px"><span class="colh">Order description</span><div class="shown">${highlight($("#desc").value, r.description.exact.map(x => ({text: x.match, cls: "inj"})))}</div>${detectorBlock(r.description)}</div>
+      <div class="col" style="gap:8px"><span class="colh">Shop name</span><div class="shown">${highlight($("#shop").value, r.shop_name.exact.map(x => ({text: x.match, cls: "inj"})))}</div>${detectorBlock(r.shop_name)}</div></div>
+      <span class="note">These are scanned for manipulation only; no facts are read from them.</span></div>`;
+}
+$("#add").onclick = () => { LINES.push(""); renderInputs(); };
+["desc", "shop"].forEach(id => $("#" + id).addEventListener("input", read));
+$("#model").onchange = read;
+(async () => {
+  EX = await api("/api/examples");
+  const group = (label, xs, key) => `<optgroup label="${label}">${xs.map((x, i) => `<option value="${key}:${i}">${esc(x.label)} · ${esc(x.text.slice(0, 60))}</option>`).join("")}</optgroup>`;
+  $("#ex").innerHTML = `<option value="">—</option>` + group("From the stories", EX.story, "story") + group("Attacks", EX.attacks, "attacks") + group("Benign but tricky", EX.benign, "benign");
+  $("#ex").onchange = () => { const [k, i] = $("#ex").value.split(":"); if(!k) return; LINES[0] = EX[k][+i].text; renderInputs(); read(); };
+  $("#model").disabled = !EX.model; if(!EX.model) $("#model-l").textContent = "Model fallback (off: needs a model and LEASH_LLM_EXTRACT=1)";
+  renderInputs(); read();
+})();
+</script>
+</body>
+</html>

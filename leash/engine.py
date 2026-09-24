@@ -93,6 +93,7 @@ class Engine:
             if self.extractor_fallback:
                 facts = self.extractor_fallback(a["items"], facts)
             rules = list(mandate["hard_rules"]) + controls.extra_rules.get(mandate["mandate_id"], [])
+            rules += [r for r in controls.permanent_rules if r not in rules]      # the customer's standing rules
             have = {r["field"] for r in rules}
             rules += [r for r in SAFETY_NET if r["field"] not in have]
 
@@ -112,9 +113,13 @@ class Engine:
             for c in checks:
                 if c.tier == "customer" and c.field in {r["field"] for r in controls.extra_rules.get(mandate["mandate_id"], [])}:
                     c.tier = "added-by-you"
+                elif c.tier == "customer" and c.rule is not None and c.rule in controls.permanent_rules \
+                        and c.rule not in mandate["hard_rules"]:
+                    c.tier = "permanent"
             if ap2:
                 checks = self._merge_ap2(checks, ap2)
-            policy = controls.uncertainty_override.get(mandate["mandate_id"], mandate["uncertainty_policy"])
+            policy = _stricter(controls.uncertainty_override.get(mandate["mandate_id"], mandate["uncertainty_policy"]),
+                               controls.permanent_policy)
             decision, reasons = self.combine(checks, policy)
 
             security_flags = []
@@ -290,6 +295,13 @@ class Engine:
             rec.status = "approved" if decision == "approve" else "declined"
             rec.resolved_by, rec.resolved_at = by, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             controls.log("step_up_resolved", by, authorization_id=live_id, decision=decision)
+            if decision == "approve":   # what the customer accepts becomes usual for them (the price check learns)
+                for line in rec.result.get("items", []):
+                    unit = self.pack.to_chf(line["unit_price"], line["currency"])
+                    seen = controls.approved_prices.setdefault(line["item_id"], [])
+                    if unit not in seen:
+                        seen.append(unit)
+                        controls.log("price_learned", by, item_id=line["item_id"], unit_price_chf=unit)
             msg = ("The customer confirmed this purchase." if decision == "approve"
                    else "The customer declined this purchase.")
             return {"decision": decision, "customer_message": msg, "evidence": [], "warning": warning}
@@ -324,6 +336,14 @@ class Engine:
                 return {"field": "authorization.merchant.merchant_id", "operator": "not_in", "value": [merchant_id]}
             return None
 
+    def set_permanent(self, customer_id: str, rules: list[dict], policy: str | None = None, by: str = "customer") -> None:
+        """The customer's standing rules (from their profile), applied to every mandate from the next decision."""
+        with self.store.lock:
+            controls = self.store.customer(customer_id)
+            controls.permanent_rules = [dict(r) for r in rules]
+            controls.permanent_policy = policy
+            controls.log("permanent_rules_set", by, rules=len(rules), policy=policy)
+
     def revoke(self, customer_id: str, mandate_id: str, by: str = "customer") -> None:
         with self.store.lock:
             controls = self.store.customer(customer_id)
@@ -348,6 +368,11 @@ class Engine:
 def _with_rule(check: Check, rule: dict) -> Check:
     check.rule = rule
     return check
+
+
+def _stricter(a: str, b: str | None) -> str:
+    order = {"approve": 0, "ask": 1, "decline": 2}
+    return a if b is None or order[a] >= order[b] else b
 
 
 def _codes(checks: list[Check]) -> list[str]:

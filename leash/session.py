@@ -69,13 +69,17 @@ class Session:
         draft = self.compiler.compile(instruction)
         model = None
         if self.use_llm:
-            before = len(draft.hard_rules)
             llm.augment(draft, sorted(self.pack.item_categories))
             from .fields import describe
             rev = llm.STATUS.get("last_review") or {"proposed": 0, "dropped": []}
             model = {**{k: llm.STATUS[k] for k in ("provider", "model", "last_error", "last_latency_s")},
-                     "proposed": rev["proposed"], "suggested": len(draft.hard_rules) - before,
-                     "dropped": [{"text": _dropped_text(d["rule"]), "why": d["why"]} for d in rev["dropped"]]}
+                     "proposed": rev["proposed"], "suggested": len(rev.get("kept_view", [])),
+                     "kept": [{"text": _dropped_text(k["rule"]), "quote": k["quote"], "rule": k["rule"],
+                               "ai_added": k.get("ai_added"),
+                               "extends": _dropped_text(k["extends"]) if k.get("extends") else None}
+                              for k in rev.get("kept_view", [])],
+                     "dropped": [{"text": _dropped_text(d["rule"]), "why": d["why"], "quote": d.get("quote"), "rule": d["rule"]}
+                                 for d in rev["dropped"]]}
         _, card = self.customer_for(scenario_id)
         bt = backtest(self.pack, self.engine.profile(card), draft.hard_rules)
         return {"draft": draft.as_dict(), "backtest": bt, "profile": self.engine.profile(card).summary(), "model": model}

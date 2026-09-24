@@ -13,6 +13,7 @@ Design: [`../agent-on-a-leash-plan.md`](../agent-on-a-leash-plan.md). Data: `../
 uv sync
 uv run leash demo-web              # interactive demo at http://127.0.0.1:8001 (see below)
 uv run leash flow-web              # phone + diagram of how each purchase is evaluated, http://127.0.0.1:8002
+uv run leash lab permanent         # try one part on its own (see "Lab"): permanent | mandate | apply | shop-text | respond
 uv run leash demo                  # narrated demo + reports/demo_report.html + reports/stats.json
 uv run leash ui                    # customer UI at http://127.0.0.1:8000 (offline simulator)
 uv run leash eval                  # all statistics
@@ -45,10 +46,10 @@ or `uv run leash ui` (the UI switches to the live API when both variables are se
 Optional model: **Apertus** (`swiss-ai/Apertus-v1.5-70B`, Swisscom Swiss AI Weeks endpoint) when `APERTUS_KEY` is set,
 otherwise OpenAI (`OPENAI_API_KEY`, model in `LEASH_OPENAI_MODEL`). Keys may live in `leash/.env`; Swisscom keys expire
 after 60 minutes. Override with `LEASH_LLM_PROVIDER=apertus|openai|none`. Install with `uv sync --extra llm`.
-The model only (1) proposes rules at setup, which a review keeps only if they are valid fields, grounded in the customer's
-own words, consistent with what they asked to buy, and not already covered; dropped suggestions are shown with the reason;
+The model (1) proposes rules at setup, which a review keeps only if they are valid fields, quote the customer's
+exact words, consistent with what they asked to buy, and not already covered; dropped suggestions are shown with the reason;
 and (2) when `LEASH_LLM_EXTRACT=1`, fills a size/return window the regexes missed, only if the value appears verbatim in the
-shop text. Purchase decisions never come from a model. `uv run python -m leash.eval.compare_models` writes a case-by-case
+shop text. At decision time the model only judges shop names and product descriptions that word matching can't decide (`leash/judged.py`); it must point at real words, and when it is down or unsure the purchase goes to the customer. `uv run python -m leash.eval.compare_models` writes a case-by-case
 Apertus vs Luna transcript report to `reports/model_comparison.html`. Tests always run with the model disabled.
 
 ## Flow demo (`leash flow-web`)
@@ -82,6 +83,29 @@ Three areas, for explaining the system:
 
 The data lineage lives in `leash/lineage.py`; a test keeps it in step with the field catalogue.
 `scripts/flow_web_walkthrough.py` drives the demo headlessly and saves screenshots.
+
+## Lab: each part on its own (`leash lab <part>`)
+
+Five small pages, one per part, each on its own port. Everything is pre-filled from the data pack and editable.
+
+| Part | Port | Try |
+|---|---|---|
+| `permanent` | 8101 | A customer's profile (customers.csv) → **permanent rules** that apply to every mandate. Edit the profile text; see which words became rules, what is only noted (and why), and what the rules would have done on the card's last 12 months. |
+| `mandate` | 8102 | An instruction → the mandate's rules: the phrase behind each rule, the model's suggestions and why the review dropped them, the always-on checks, open questions, backtest. |
+| `apply` | 8103 | Permanent + mandate rules against one purchase. Edit any rule (field, operator, value) or any field of the purchase and see the decision and every check as Rule → Input → How → Result. Optionally decide the story's earlier purchases first. |
+| `shop-text` | 8104 | Any product text → the typed facts it yields (with the exact words), the manipulation patterns that fire (with the exact words), the unexplained-prose count, and what gets withheld. Examples from the stories and the attack / benign test sets. |
+| `respond` | 8105 | A story runs until a purchase asks the customer. Answer on the phone; flag, block or clear the shop; decline when unsure; withdraw permission. Then send the next purchase, or the same shop again, to see what each choice changed. |
+
+**Permanent rules** (`leash/permanent.py`):
+- They are read from the profile with fixed patterns only, because they apply to every purchase. Three kinds of statement become rules:
+  - **prohibitions** ("avoids gift vouchers" → no vouchers; "no automatic premium upgrades" / "no marketplace add-ons" → nothing unrequested; "no subscriptions" → nothing billed again later);
+  - **where the customer shops and travels** → a shop elsewhere *asks*, never declines (`derived.shop_country_expected`);
+  - **a careful budget style** → ask when unsure.
+- Everything else is noted with the reason: a preference about some purchases belongs in a mandate, or there is no field or no catalogue item for it.
+- The engine applies them per customer (`Engine.set_permanent`) on top of the mandate, and the stricter uncertainty policy wins.
+- Not yet exposed in the decision API.
+
+`scripts/lab_walkthrough.py` drives all five pages (start them first) and saves screenshots.
 
 ## AP2: the autonomous flow with shop-signed carts (simulator)
 

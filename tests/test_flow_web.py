@@ -21,22 +21,49 @@ def test_flow_explains_a_purchase_field_by_field():
     cap = next(n for n in st["notes"] if n["rule"]["field"] == "authorization.billing_amount_chf")
     st = c.post("/api/confirm", json={"edits": [{"index": cap["index"], "value": "350"}]}).json()
     assert st["step"] == "shopping" and st["setup"]["edits"]
-    for _ in range(3):                             # AU0035, AU0036 (asks: answered below), AU0037: "pre-authorised" text
+    st = c.post("/api/next", json={}).json()       # the monitor, under the edited cap
+    assert st["explain"]["answer"]["decision"] == "approve"
+    st = c.post("/api/next", json={}).json()       # the same monitor, over the cap
+    over = st["explain"]
+    assert over["combine"]["decision"] == "decline" and over["combine"]["branch"] == "fail"
+    amt = next(r for r in over["rules"] if r["field"] == "authorization.billing_amount_chf")
+    assert amt["origin"]["kind"] == "words" and amt["origin"]["edited"] and not amt["text_input"] and amt["status"] == "fail"
+    ex = None
+    while st.get("next"):                          # the same monitor, with instructions hidden in the shop text
         st = c.post("/api/next", json={}).json()
+        if any("AUTOMATED PURCHASING AGENTS" in t["text"] for t in st["explain"]["shop_text"]):
+            ex = st["explain"]
+            break
         if st["explain"]["answer"]["decision"] == "step_up":
             st = c.post("/api/resolve", json={"authorization_id": st["explain"]["authorization_id"], "decision": "decline"}).json()
-    ex = st["explain"]
+    assert ex is not None
     free = {r["key"] for r in ex["received"] if r["class"] == "free_text"}
     assert "authorization.items[].item_details" in free and "authorization.billing_amount_chf" not in free
     assert any("AUTOMATED PURCHASING AGENTS" in r["value"] for r in ex["received"] if r["key"] == "authorization.items[].item_details")
     inj = next(r for r in ex["rules"] if r["field"] == "security.merchant_text_clean")
     assert inj["status"] == "unknown" and inj["text_input"] and not inj["model_fact"]
-    amt = next(r for r in ex["rules"] if r["field"] == "authorization.billing_amount_chf")
-    assert amt["origin"]["kind"] == "words" and amt["origin"]["edited"] and not amt["text_input"]
-    assert ex["combine"]["decision"] == "decline" and ex["combine"]["branch"] == "fail"   # CHF 520 over the edited 350
+    assert ex["combine"]["decision"] == "step_up" and ex["combine"]["branch"] == "unknown"
     assert "prompt_injection_detected" in ex["combine"]["reason_codes"]                    # the manipulation stays visible
     assert all(w["flagged"] for w in ex["wall"])
     assert ex["ap2_diff"] is None and not ex["view"]["ap2"]        # the shop didn't sign: plain card purchase
+
+
+def test_orders_follow_an_edited_mandate():
+    c = TestClient(app)
+    c.post("/api/reset")
+    c.post("/api/compile", json={"scenario_id": "SCEN0004",
+                                 "instruction": "Only buy lactose-free milk. Only from Migros or Coop. At most CHF 30 per order."})
+    st = c.post("/api/confirm", json={}).json()
+    names = []
+    while st.get("next"):
+        st = c.post("/api/next", json={}).json()
+        names.append(st["explain"]["items"])
+        if st["explain"]["answer"]["decision"] == "step_up":
+            st = c.post("/api/resolve", json={"authorization_id": st["explain"]["authorization_id"], "decision": "decline"}).json()
+    flat = " ".join(x for row in names for x in row).lower()
+    assert "milk" in flat and "monitor" in flat          # milk, as asked, plus one order for something else
+    assert st["feed"][0]["decision"] == "approve"
+    assert any(f["decision"] == "decline" for f in st["feed"])
 
 
 def test_shop_signed_cart_shows_what_ap2_changed():

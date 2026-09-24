@@ -223,7 +223,7 @@ function renderSide(){
   const pol = {ask:"If unsure → ask the customer", decline:"If unsure → decline", approve:"If unsure → approve (manipulation is still asked)"}[d.uncertainty_policy];
   $("#rules").innerHTML = `
     <p class="note">${esc(ST.customer.persona)} · mandate <span class="mono">${esc(ST.mandate.mandate_id)}</span></p>
-    <ul class="plain">${mine.map(n => `<li>${esc(n.text)}${n.tier.startsWith("suggested") ? ` <span class="pill edit">AI suggestion</span>` : ""}</li>`).join("")}</ul>
+    <ul class="plain">${mine.map(n => `<li>${esc(n.text)}${n.tier.startsWith("suggested") ? ` <span class="pill edit">AI suggestion</span>` : ""}${n.ai_added ? ` <span class="pill llm" title="Shops you didn't name, from the AI's knowledge of which shops belong together. Remove any you don't want.">AI added: ${esc(n.ai_added.join(", "))}</span>` : ""}</li>`).join("")}</ul>
     ${ST.model ? `<details><summary>${esc((ST.model.model || "").split("/").pop())}: ${ST.model.last_error && !ST.model.proposed ? "unavailable" : modelSummary(ST.model)}</summary>
       ${ST.model.last_error && !ST.model.proposed ? `<p class="note">${esc(ST.model.last_error)}</p>` : ""}
       <ul class="plain" style="margin-top:6px">${(ST.model.dropped || []).map(d => `<li>${esc(d.text)}<br><span class="note">dropped: ${esc(d.why)}</span></li>`).join("") || "<li class='note'>Nothing dropped.</li>"}</ul></details>` : `<p class="note">No language model configured: rules come from the deterministic compiler only.</p>`}

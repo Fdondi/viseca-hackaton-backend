@@ -109,8 +109,11 @@ def test_parse_then_save_rule_is_used_for_decisions(client, mandate):
 def test_parse_shop_block_and_loosening(client, mandate):
     mid = mandate["mandate_id"]
     shop = client.post(f"/v1/mandates/{mid}/rules/parse", json={"text": "No orders from Alpine Basket."}).json()
-    assert shop["proposed"][0]["rule"] == {"field": "authorization.merchant.merchant_id", "operator": "not_in",
-                                           "value": ["ME0001"]}
+    rule = shop["proposed"][0]["rule"]
+    assert rule == {"field": "derived.shop_named", "operator": "not_in", "value": ["Alpine Basket"]}
+    client.post(f"/v1/mandates/{mid}/rules", json={"text": shop["text"], "rules": [rule], "confirmed": True})
+    d = client.post("/v1/decisions", json=purchase(mid)).json()
+    assert d["decision"] == "decline" and [c["field"] for c in d["decided_by"]] == ["derived.shop_named"]
     strict = client.post(f"/v1/mandates/{mid}/rules/parse", json={"text": "Decline it when you are not sure."}).json()
     assert strict["uncertainty_policy"] == "decline"
     same = client.post(f"/v1/mandates/{mid}/rules/parse", json={"text": "Buy one grocery item for CHF 20 or less."}).json()
@@ -241,3 +244,117 @@ def test_parse_without_any_rule_is_an_error(client, mandate):
     assert loose.status_code == 422 and loose.json()["detail"]["reasons"]
     same = client.post(f"/v1/mandates/{mid}/rules/parse", json={"text": "Buy one grocery item for CHF 20 or less."})
     assert same.status_code == 200 and same.json()["already_in_mandate"]
+
+
+# ------------------------------------------------------------------ the customer's own words, judged flexibly
+MILK = "Buy milk every week. Only buy lactose-free milk. Only buy from Migros or Coop. At most CHF 30 per order."
+
+
+@pytest.fixture
+def milk(client):
+    d = client.post("/v1/mandates/compile", json={"customer_id": "CU0001", "instruction": MILK}).json()
+    fields = {n["rule"]["field"] for n in d["rules_explained"] if n["source"] != "safety net"}
+    assert {"derived.shop_named", "derived.product_is", "derived.period_order_count"} <= fields
+    return client.post("/v1/mandates", json={"customer_id": "CU0001", "instruction": MILK,
+                                             "hard_rules": d["hard_rules"], "confirmed": True}).json()["mandate_id"]
+
+
+def buy_milk(mid, shop, name, details="", day=10, mid_shop="MEX001"):
+    return {"mandate_id": mid, "merchant": {"merchant_id": mid_shop, "merchant_name": shop, "merchant_category": "groceries"},
+            "timestamp": f"2026-08-{day:02d}T10:00:00Z",
+            "items": [{"item_name": name, "item_category": "groceries", "unit_price": 2.2, "item_details": details}]}
+
+
+def effects(d):
+    return {c["field"]: c["effect"] for c in d["rules"] if c["field"].startswith("derived.") and c["result"] != "passed"}
+
+
+def test_plain_words_decide_without_the_model(client, milk):
+    d = client.post("/v1/decisions", json=buy_milk(milk, "Migros Online", "Lactose-free milk 1 l")).json()
+    assert d["decision"] == "approve", d["decided_by"]
+    second = client.post("/v1/decisions", json=buy_milk(milk, "Coop", "Lactose free milk", day=12, mid_shop="MEX002")).json()
+    assert second["decision"] == "step_up" and effects(second) == {"derived.period_order_count": "caused step_up"}
+
+
+def test_lookalike_spelling_and_missing_words_ask(client, milk):
+    d = client.post("/v1/decisions", json=buy_milk(milk, "Mlgros", "Lactose-free milk")).json()
+    assert d["decision"] == "step_up" and "derived.shop_named" in effects(d)
+    d = client.post("/v1/decisions", json=buy_milk(milk, "Migros", "Whole milk 1 l", day=20)).json()
+    assert d["decision"] == "step_up" and "derived.product_is" in effects(d)   # model off: can't confirm → ask
+
+
+def test_model_judges_when_words_dont_decide(client, milk, monkeypatch):
+    from leash import llm
+    monkeypatch.setattr(llm, "judge_shop", lambda shop, allowed: {
+        "match": "Migros" if shop["merchant_name"] == "Migrolino" else None,
+        "reason": "a Migros convenience store" if shop["merchant_name"] == "Migrolino" else "a different chain"})
+    monkeypatch.setattr(llm, "judge_product", lambda name, details, wanted: {
+        "reason": "German for lactose-free milk",
+        "parts": [{"part": "lactose-free", "evidence": "laktosefrei"}, {"part": "milk", "evidence": "Vollmilch"}]})
+    ok = client.post("/v1/decisions", json=buy_milk(milk, "Migrolino", "Vollmilch", "laktosefrei, 1 l")).json()
+    assert ok["decision"] == "approve", ok["decided_by"]
+    assert any(c["provenance"] == "model" for c in ok["rules"] if c["field"] == "derived.shop_named")
+    no = client.post("/v1/decisions", json=buy_milk(milk, "Aldi Suisse", "Vollmilch", "laktosefrei", day=20)).json()
+    assert no["decision"] == "decline" and effects(no)["derived.shop_named"] == "caused decline"
+
+
+def test_model_evidence_must_be_in_the_text(client, milk, monkeypatch):
+    from leash import llm
+    monkeypatch.setattr(llm, "judge_product", lambda name, details, wanted: {
+        "reason": "trust me",
+        "parts": [{"part": "lactose-free", "evidence": "lactose-free"}, {"part": "milk", "evidence": "Vollmilch"}]})
+    d = client.post("/v1/decisions", json=buy_milk(milk, "Coop", "Vollmilch", "frisch")).json()   # 'lactose-free' isn't there
+    assert d["decision"] == "step_up" and "derived.product_is" in effects(d)
+    monkeypatch.setattr(llm, "judge_product", lambda name, details, wanted: {
+        "reason": "lactose free",
+        "parts": [{"part": "lactose-free", "evidence": "naturally lactose free"}, {"part": "milk", "evidence": ""}]})
+    d = client.post("/v1/decisions", json=buy_milk(milk, "Coop", "Oat drink", "naturally lactose free", day=20)).json()
+    assert d["decision"] == "step_up" and "derived.product_is" in effects(d)
+
+
+def test_evidence_may_be_inflected_but_not_part_of_another_word():
+    from leash.judged import shown_in
+    assert shown_in("Laktosefreie Milch", "laktosefrei") and shown_in("Milk, no lactose", "no lactose")
+    assert not shown_in("Buttermilk", "milk") and not shown_in("Milkshake", "milk")
+
+
+def test_kinds_of_shop_are_judged_by_the_ai(client, monkeypatch):
+    from leash import llm
+    text = "Only from Coop or farmer shops. At most CHF 40 per order."
+    d = client.post("/v1/mandates/compile", json={"customer_id": "CU0001", "instruction": text}).json()
+    mid = client.post("/v1/mandates", json={"customer_id": "CU0001", "instruction": text, "hard_rules": d["hard_rules"],
+                                            "confirmed": True}).json()["mandate_id"]
+    seen = []
+
+    def judge(shop, allowed):
+        seen.append(shop)
+        farm = "Hof" in shop["merchant_name"]
+        return {"match": "farmer shops" if farm else None, "reason": "a farm shop" if farm else "a supermarket"}
+    monkeypatch.setattr(llm, "judge_shop", judge)
+    buy = lambda shop, day: {"mandate_id": mid, "merchant": {"merchant_id": f"MEX{day}", "merchant_name": shop,
+                             "merchant_category": "groceries"}, "timestamp": f"2026-08-{day:02d}T10:00:00Z",
+                             "items": [{"item_name": "Eggs", "item_category": "groceries", "unit_price": 6}]}
+    farm = client.post("/v1/decisions", json=buy("Hofladen Bühler", 10)).json()
+    assert farm["decision"] == "approve", farm["decided_by"]
+    assert seen[0]["merchant_category"] == "groceries"                       # the AI sees the shop's details
+    coop = client.post("/v1/decisions", json=buy("Coop City", 12)).json()
+    assert coop["decision"] == "approve" and len(seen) == 1                  # a name matched by words: no AI
+    other = client.post("/v1/decisions", json=buy("Lidl", 14)).json()
+    assert other["decision"] == "decline"
+
+
+def test_a_price_the_customer_approved_becomes_usual_for_them(client):
+    text = "Groceries only, at most CHF 20 per order."
+    d = client.post("/v1/mandates/compile", json={"customer_id": "CU0002", "instruction": text}).json()
+    mid = client.post("/v1/mandates", json={"customer_id": "CU0002", "instruction": text, "hard_rules": d["hard_rules"],
+                                            "confirmed": True}).json()["mandate_id"]
+    buy = lambda day, price: {"mandate_id": mid, "merchant": {"merchant_id": "ME0001"}, "timestamp": f"2026-08-{day:02d}T10:00:00Z",
+                              "items": [{"item_id": "IT0001", "unit_price": price}]}
+    price = lambda d: next(r for r in d["rules"] if r["field"] == "derived.price_plausible")
+    first = client.post("/v1/decisions", json=buy(3, 2.0)).json()
+    assert price(first)["result"] == "uncertain"                       # CHF 2 for produce: below the catalogue range
+    client.post(f"/v1/decisions/{first['authorization_id']}/resolve", json={"decision": "approve"})
+    again = client.post("/v1/decisions", json=buy(10, 2.1)).json()
+    assert price(again)["result"] == "passed" and "you approved before" in price(again)["explanation"]
+    far = client.post("/v1/decisions", json=buy(17, 5.0)).json()       # far from anything approved: still unusual
+    assert price(far)["result"] == "uncertain"

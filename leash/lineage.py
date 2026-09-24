@@ -3,9 +3,11 @@
 Used by the flow demo (`leash flow-web`) to draw how a purchase is evaluated. A test keeps it in
 step with the field catalogue (every catalogue field must say what it reads).
 
-Every check is computed by fixed code. A model is only ever used at setup (proposing rules the
-customer then confirms) and, if LEASH_LLM_EXTRACT=1, to fill a size or return window the regexes
-missed, only when that value appears verbatim in the shop's text.
+Every check is computed by fixed code, with three uses of a model: at setup (proposing rules the
+customer then confirms); if LEASH_LLM_EXTRACT=1, to fill a size or return window the regexes missed,
+only when that value appears verbatim in the shop's text; and for the checks in MODEL_JUDGED
+(judged.py), to judge a shop name or product description that plain word matching can't decide.
+The model must point at words really in the text, and when it can't, the check is uncertain.
 """
 from __future__ import annotations
 
@@ -65,6 +67,11 @@ READS: dict[str, list[str]] = {
     "derived.session_integrity": [A + "customer_device_id", A + "recent_attempt_count_10m", A + "merchant.merchant_country",
                                   "viseca.card_history", "viseca.run_ledger"],
     "derived.requote_clean": [A + "related_authorization_id", "viseca.run_ledger", "customer.controls"],
+    # judged.py: the customer's own words, matched by name / description, the model judging when words don't decide
+    "derived.shop_named": [A + "merchant.merchant_name", "detector.injection"],
+    "derived.product_is": [A + "items[].item_name", A + "items[].item_details", "detector.injection"],
+    "derived.period_order_count": [A + "timestamp", "viseca.run_ledger"],
+    "derived.shop_country_expected": [A + "merchant.merchant_country"],
     "controls.merchant_flag": [A + "merchant.merchant_id", "customer.controls"],
     "mandate.status": ["mandate.status", "customer.controls"],
     "authorization.card_status_at_attempt": [A + "card_status_at_attempt", A + "authority_status"],
@@ -72,7 +79,36 @@ READS: dict[str, list[str]] = {
                              A + "items[].quantity", A + "items[].unit_price"],
 }
 
+# checks where the model judges at purchase time when plain word matching can't decide (judged.py)
+MODEL_JUDGED = {"derived.shop_named", "derived.product_is"}
+
+
+def judged_by_model(field: str) -> bool:
+    return field in MODEL_JUDGED
+
+
+def ai_role(field: str, extraction: bool = False) -> str | None:
+    """How the AI can take part in deciding this check at purchase time; None when it never does.
+    `extraction`: the model may read size / return window from the shop's text (LEASH_LLM_EXTRACT=1)."""
+    if field == "derived.shop_named":
+        return ("Words first: the shop's name is matched to the names you gave. If that doesn't settle it, the AI "
+                "judges whether it is the same retailer. A near-miss spelling asks you instead.")
+    if field == "derived.product_is":
+        return ("Words first: every part of your description must appear in the product's name or description. If "
+                "not, the AI points at the words that show it (any language); they must really be there, otherwise "
+                "we ask you.")
+    if extraction and field in ("extracted.size", "extracted.return_days"):
+        return ("Patterns read this from the shop's text first. If they miss it, the AI may read it, kept only if "
+                "the value appears word for word.")
+    return None
+
+
 HOW = {
+    "derived.shop_named": "match the shop's name to the names you gave (whole words); a near-miss spelling asks you; "
+                          "otherwise the AI judges (same retailer, branch or online store)",
+    "derived.product_is": "look for every part of your description in the product's name and description; otherwise the "
+                          "AI points at the words that show it (any language), which must really be there; not shown → ask",
+    "derived.period_order_count": "count this mandate's approved orders in the window (simulated time)",
     "authorization.billing_amount_chf": "compare the CHF total (fixed FX rates) with your limit",
     "derived.period_spend_chf": "add this order to purchases approved in the window (simulated time)",
     "derived.basket_units": "count the units in the basket",
@@ -90,6 +126,7 @@ HOW = {
     "derived.price_plausible": "unit price against the item's reference range",
     "derived.session_integrity": "unknown device, burst of attempts, or never-used country",
     "derived.requote_clean": "re-quote of an attempt that tried to manipulate",
+    "derived.shop_country_expected": "shop country against the countries in your profile; can only ask",
 }
 
 

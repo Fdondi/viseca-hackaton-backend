@@ -87,6 +87,15 @@ def cmd_flow_web(a):
     uvicorn.run("leash.flow_web.app:app", host=a.host, port=a.port, log_level="warning")
 
 
+def cmd_lab(a):
+    import uvicorn
+    from .lab.common import MODULES, PORTS
+    port = a.port or PORTS[a.part]
+    print(f"Lab '{a.part}' on http://{a.host}:{port}  (the other parts: " +
+          ", ".join(f"{k} :{v}" for k, v in PORTS.items() if k != a.part) + ")")
+    uvicorn.run(f"leash.lab.{MODULES[a.part]}:app", host=a.host, port=port, log_level="warning")
+
+
 def cmd_live(a):
     """Event day: talk to the hosted API (needs LEASH_BASE_URL and TEAM_API_KEY)."""
     import time
@@ -159,6 +168,11 @@ def main(argv=None):
     fw.add_argument("--host", default="127.0.0.1")
     fw.add_argument("--port", type=int, default=8002)
     fw.set_defaults(fn=cmd_flow_web)
+    lb = sub.add_parser("lab", help="try one part on its own: permanent | mandate | apply | shop-text | respond")
+    lb.add_argument("part", choices=["permanent", "mandate", "apply", "shop-text", "respond"])
+    lb.add_argument("--host", default="127.0.0.1")
+    lb.add_argument("--port", type=int, default=None)
+    lb.set_defaults(fn=cmd_lab)
     lv = sub.add_parser("live", help="event day: run against the hosted API")
     lv.add_argument("--scenario", default="SCEN0000")
     lv.set_defaults(fn=cmd_live)
